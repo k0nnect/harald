@@ -167,9 +167,12 @@ else's devices.
   ```
 
   that grants a budget of n writes for m minutes (50 and 30 if you leave the flags
-  out), and each write spends one.
+  out), and each write spends one. it shows the grant and waits for you to type
+  `arm`, and it refuses to run outside a terminal, so it can't be piped through.
   `harald status` shows what is armed and `harald disarm <address>` revokes it. there
-  is no mcp tool that arms, so your agent can never approve its own writes.
+  is no mcp tool that arms, so your agent can never approve its own writes. one gap
+  remains: grants live in a file, `~/.harald/arm.json`, and an agent that can write
+  files could edit it. if yours can write outside your project, keep that in mind.
 - **firmware updates are blocked.** writes to firmware-update (dfu) services stay
   refused even when a device is armed, so a stray write cannot start a firmware update.
   only `--allow-dfu` on `harald arm` lifts that, and working out a protocol never

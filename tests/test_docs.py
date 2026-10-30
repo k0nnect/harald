@@ -88,6 +88,16 @@ def test_speak_promises_script_not_home_assistant():
     assert "home assistant" not in section.lower()
 
 
+def test_safety_keeps_the_promise_and_names_the_gap():
+    safety = _section(README.read_text(encoding="utf-8"), SECTIONS[4])
+    section = " ".join(safety.split())
+    assert "your agent can never approve its own writes" in section
+    assert "type `arm`" in section  # harald arm asks the person at the terminal
+    # the residual gap: the grant is a file an agent could edit
+    assert "`~/.harald/arm.json`" in section
+    assert "agent that can write files" in section
+
+
 def test_contributing_states_keys_rule():
     text = " ".join(CONTRIBUTING.read_text(encoding="utf-8").lower().split())
     assert "app-wide" in text

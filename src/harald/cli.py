@@ -1,8 +1,10 @@
 """The human cli: `harald <command>`, run by the gadget's owner in their own terminal.
 
 This is the only place writes can be armed (`harald arm`); the mcp server has no
-tool for it. Expected failures print `error: <message>` and `  hint: <hint>` to
-stderr and exit with code 2, never a traceback.
+tool for it. `harald arm` needs a terminal on stdin and stdout and a person typing
+`arm` at its prompt, so an agent can't arm through a pipe. Expected failures print
+`error: <message>` and `  hint: <hint>` to stderr and exit with code 2, never a
+traceback.
 
 The ble backends (`scanner_cls`, `client_cls`) and the driver runner (`runner`) are
 module-level hooks so tests can swap in fakes; they are looked up on every call.
@@ -98,6 +100,27 @@ def _scan(args: argparse.Namespace) -> int:
 
 
 def _arm(args: argparse.Namespace) -> int:
+    """Arm only for a person at a terminal who types `arm`. There is no bypass flag."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise HaraldError(
+            "harald arm only runs in an interactive terminal",
+            hint="run it yourself, in your own terminal; "
+            "an agent or a script cannot arm writes",
+        )
+    print(
+        f"this lets harald write to {args.device}: "
+        f"up to {args.writes} writes in the next {args.minutes} min"
+    )
+    if args.allow_dfu:
+        print("firmware-update services will be allowed too")
+    try:
+        answer = input("type arm to confirm: ")
+    except EOFError:  # ctrl-d
+        print()
+        answer = ""
+    if answer.strip() != "arm":
+        print("not armed")
+        return 1
     grant = arm.arm(args.device, args.writes, args.minutes, args.allow_dfu)
     print(
         f"armed {grant.device}: write budget {grant.writes_left}, "

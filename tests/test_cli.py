@@ -1,6 +1,7 @@
 """The human cli, driven through `main([...])` with fake ble backends and runner."""
 
 import subprocess
+import sys
 
 import pytest
 from bleak.exc import BleakError
@@ -22,6 +23,25 @@ def fake_backends(monkeypatch):
     monkeypatch.setattr(cli, "runner", no_shell)
 
 
+def at_terminal(monkeypatch, reply: str = "arm", *, stdin=True, stdout=True):
+    """Make stdin and stdout report a terminal where the person types `reply` when
+    asked. Returns the prompts shown.
+
+    Call it in the test body, not from a fixture: capsys swaps in a fresh sys.stdout
+    once setup is over, so a fixture would patch the wrong one.
+    """
+    prompts: list[str] = []
+
+    def type_reply(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return reply
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: stdin)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: stdout)
+    monkeypatch.setattr("builtins.input", type_reply)
+    return prompts
+
+
 def test_scan_prints_sorted_table(capsys):
     assert cli.main(["scan", "--timeout", "0.1"]) == 0
     lines = capsys.readouterr().out.splitlines()
@@ -30,13 +50,42 @@ def test_scan_prints_sorted_table(capsys):
     assert [line.split()[0] for line in lines[1:]] == ["BB-22", "AA-11", "CC-33"]
 
 
-def test_arm_then_status_shows_grant(capsys):
+def test_arm_then_status_shows_grant(monkeypatch, capsys):
+    at_terminal(monkeypatch)
     assert cli.main(["arm", "aa-11", "--writes", "5"]) == 0
     capsys.readouterr()
     assert cli.main(["status"]) == 0
     rows = [line.split() for line in capsys.readouterr().out.splitlines()]
     grant = next(row for row in rows if row[0] == "aa-11")
     assert grant[1] == "5"
+
+
+def test_arm_shows_the_grant_and_asks_first(monkeypatch, capsys):
+    prompts = at_terminal(monkeypatch)
+    assert cli.main(["arm", "aa-11", "--writes", "5", "--minutes", "10"]) == 0
+    assert prompts == ["type arm to confirm: "]
+    shown = capsys.readouterr().out.splitlines()[0]
+    assert shown == "this lets harald write to aa-11: up to 5 writes in the next 10 min"
+
+
+@pytest.mark.parametrize("reply", ["", "yes", "ARM", "arm it"])
+def test_arm_without_the_word_arms_nothing(monkeypatch, capsys, reply):
+    at_terminal(monkeypatch, reply)
+    assert cli.main(["arm", "aa-11"]) == 1
+    assert capsys.readouterr().out.endswith("\nnot armed\n")
+    assert arm.status() == []
+
+
+@pytest.mark.parametrize(("stdin", "stdout"), [(False, True), (True, False)])
+def test_arm_refuses_without_a_terminal(monkeypatch, capsys, stdin, stdout):
+    prompts = at_terminal(monkeypatch, stdin=stdin, stdout=stdout)
+    assert cli.main(["arm", "aa-11"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: harald arm only runs in an interactive terminal\n")
+    assert "hint: run it yourself, in your own terminal" in err
+    assert err == err.lower()
+    assert prompts == []  # refused before asking
+    assert arm.status() == []
 
 
 def test_capture_open_prints_timeline(tmp_path, capsys):
@@ -74,7 +123,8 @@ def test_write_without_arm_exits_2(capsys):
     assert FakeClient.writes == []
 
 
-def test_write_after_arm_reaches_device(capsys):
+def test_write_after_arm_reaches_device(monkeypatch, capsys):
+    at_terminal(monkeypatch)
     assert cli.main(["arm", "AA-11", "--writes", "5"]) == 0
     assert cli.main(["write", "AA-11", CHR, "0102"]) == 0
     assert "writes left: 4" in capsys.readouterr().out
