@@ -20,4 +20,10 @@ public class BleController {
         ch.setValue(frame);
         gatt.writeCharacteristic(ch);
     }
+
+    javax.crypto.Cipher cipher(SecretKeySpec key) throws Exception {
+        javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/ECB/NoPadding");
+        c.init(javax.crypto.Cipher.ENCRYPT_MODE, key);
+        return c;
+    }
 }

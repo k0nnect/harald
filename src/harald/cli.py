@@ -203,6 +203,8 @@ def _apk(args: argparse.Namespace) -> int:
         print(f"package: {report.package}")
     if report.jadx_dir is not None:
         print(f"jadx output: {report.jadx_dir}")
+    if report.totals:  # what the scan found, before the lists below were capped
+        print("totals: " + ", ".join(f"{k} {n}" for k, n in report.totals.items()))
     if report.gatt_uuids:
         print("gatt uuids:")
         for uuid in report.gatt_uuids:

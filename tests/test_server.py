@@ -8,6 +8,7 @@ from capture_helpers import write_capture
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
+from harald.apk import ApkReport, Candidate
 from harald.arm import arm
 from harald.server import EXPECTED_TOOLS, build_server
 
@@ -201,6 +202,7 @@ async def test_analyze_apk_returns_plain_values(tmp_path):
     assert report["path"] == str(apk)
     assert report["framework"] == "flutter"
     assert report["jadx_dir"] is None
+    assert report["totals"] == {}
 
     not_zip = tmp_path / "broken.apk"
     not_zip.write_bytes(b"not a zip")
@@ -208,3 +210,27 @@ async def test_analyze_apk_returns_plain_values(tmp_path):
         "error": "file is not a zip file",
         "hint": "",
     }
+
+
+async def test_analyze_apk_returns_the_totals(tmp_path, monkeypatch):
+    report = ApkReport(
+        path=tmp_path / "app.apk",
+        package="com.example.gadget",
+        framework="native",
+        gatt_uuids=["0000ffe1-0000-1000-8000-00805f9b34fb"],
+        candidates=[Candidate("char-uuid", "sources/a/Ble.java:3", "UUID u = x;")],
+        jadx_dir=tmp_path / "jadx",
+        warnings=[],
+        totals={"gatt_uuids": 61, "char-uuid": 61, "aes-key": 0},
+    )
+    monkeypatch.setattr("harald.apk.analyze_apk", lambda path: report)
+    result = await call(build_server(), "analyze_apk", path=str(report.path))
+    assert result["totals"] == {"gatt_uuids": 61, "char-uuid": 61, "aes-key": 0}
+    assert result["candidates"] == [
+        {
+            "kind": "char-uuid",
+            "location": "sources/a/Ble.java:3",
+            "snippet": "UUID u = x;",
+        }
+    ]
+    assert result["jadx_dir"] == str(tmp_path / "jadx")

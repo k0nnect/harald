@@ -13,6 +13,8 @@ from harald.errors import HaraldError, ToolMissing
 FIXTURES = Path(__file__).parent / "fixtures" / "apk"
 JADX_FIXTURE = FIXTURES / "jadx-output"
 SIG_TAIL = "-0000-1000-8000-00805f9b34fb"
+GADGET = "sources/com/example/gadget"  # the fixture app's own package
+UUID_LINE = 'UUID c = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb");\n'
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +70,23 @@ def _broken_jadx(cmd, **kwargs):
     return subprocess.CompletedProcess(cmd, 1, "", "ERROR - failed to load dex\n")
 
 
+def _jadx_writing(files: dict[str, str], package: str = "com.example.gadget"):
+    """A fake jadx that writes `files` under sources/ and a manifest naming `package`."""
+
+    def run(cmd, **kwargs):
+        out = Path(cmd[cmd.index("-d") + 1])
+        manifest = out / "resources" / "AndroidManifest.xml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(f'<manifest package="{package}"/>\n')
+        for rel, text in files.items():
+            source = out / "sources" / rel
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(text)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return run
+
+
 def _native_report(tmp_path, runner=_fake_jadx):
     apk_path = _write_apk(
         tmp_path / "app.apk",
@@ -113,8 +132,14 @@ def test_native_apk_scans_sources(tmp_path):
     report = apk.analyze_apk(apk_path, jadx_runner=_fake_jadx)
 
     assert report.framework == "native"
+    assert report.package == "com.example.gadget"
     assert "0000ffe0-0000-1000-8000-00805f9b34fb" in report.gatt_uuids
-    assert any(c.kind == "aes-key" for c in report.candidates)
+    # only the lines that build a key or a cipher: no import, no method signature
+    keys = [c.location for c in report.candidates if c.kind == "aes-key"]
+    assert keys == [
+        f"{GADGET}/BleController.java:15",
+        f"{GADGET}/BleController.java:25",
+    ]
 
 
 def test_flutter_app_reports_logic_not_in_jadx(tmp_path):
@@ -127,6 +152,7 @@ def test_flutter_app_reports_logic_not_in_jadx(tmp_path):
 
     assert report.framework == "flutter"
     assert report.candidates == []
+    assert report.totals == {}
     assert "logic not in jadx output" in report.warnings[0]
 
 
@@ -207,3 +233,95 @@ def test_uuid_kind_reads_the_whole_statement(tmp_path):
 
     assert ("service-uuid", "BleController.java:10") in found
     assert ("char-uuid", "BleController.java:12") in found
+
+
+def test_base64_blobs_must_decode_to_an_aes_key_size(tmp_path):
+    # flagged: 16- and 32-byte keys. not flagged: two paths that happen to decode to
+    # 24 bytes, and a 20-byte string.
+    report = _native_report(tmp_path)
+    blobs = [c.location for c in report.candidates if c.kind == "base64-blob"]
+    assert blobs == [f"{GADGET}/Constants.java:12", f"{GADGET}/Constants.java:13"]
+
+
+def test_library_tree_fixture_yields_no_candidates(tmp_path):
+    report = _native_report(tmp_path)
+
+    assert "0000aaa0" + SIG_TAIL not in report.gatt_uuids
+    assert "0000ffa1" + SIG_TAIL not in report.gatt_uuids
+    assert [c for c in report.candidates if "/androidx/" in c.location] == []
+
+
+@pytest.mark.parametrize(
+    "tree",
+    [
+        "android/bluetooth",
+        "androidx/core",
+        "kotlin/io",
+        "kotlinx/coroutines",
+        "com/google/gson",
+        "okhttp3/internal",
+        "okio",
+        "io/reactivex/internal",
+        "org/jetbrains/annotations",
+        "com/facebook/react",
+        "com/squareup/moshi",
+    ],
+)
+def test_library_trees_are_skipped(tmp_path, tree):
+    report = _native_report(
+        tmp_path, runner=_jadx_writing({f"{tree}/Gatt.java": UUID_LINE})
+    )
+
+    assert report.gatt_uuids == []
+    assert report.candidates == []
+
+
+def test_own_package_is_scanned_even_inside_a_library_tree(tmp_path):
+    runner = _jadx_writing(
+        {"com/facebook/gadget/Ble.java": UUID_LINE}, package="com.facebook.gadget"
+    )
+    report = _native_report(tmp_path, runner=runner)
+
+    assert report.gatt_uuids == ["0000ffe1" + SIG_TAIL]
+
+
+def test_totals_count_every_kind_and_nothing_is_cut(tmp_path):
+    report = _native_report(tmp_path)
+
+    assert report.totals == {
+        "gatt_uuids": 3,
+        "service-uuid": 1,
+        "char-uuid": 2,
+        "aes-key": 2,
+        "base64-blob": 2,
+        "command-builder": 2,
+    }
+    assert report.warnings == []
+    assert not (report.jadx_dir / "harald-candidates.txt").exists()
+
+
+def test_caps_keep_the_own_package_first_and_list_everything_in_a_file(tmp_path):
+    # 60 uuids in obfuscated vendor code that sorts before the app's own package
+    many = "".join(
+        f'UUID u{i} = UUID.fromString("{i:08x}{SIG_TAIL}");\n' for i in range(60)
+    )
+    runner = _jadx_writing(
+        {"a/b/Obf.java": many, "com/example/gadget/Ble.java": UUID_LINE}
+    )
+
+    report = _native_report(tmp_path, runner=runner)
+
+    chars = [c for c in report.candidates if c.kind == "char-uuid"]
+    assert len(report.gatt_uuids) == len(chars) == 50
+    assert report.totals["gatt_uuids"] == report.totals["char-uuid"] == 61
+    assert chars[0].location == f"{GADGET}/Ble.java:1"
+    assert "0000ffe1" + SIG_TAIL in report.gatt_uuids
+    listing = report.jadx_dir / "harald-candidates.txt"
+    [warning] = [
+        w.replace(str(listing), "") for w in report.warnings if str(listing) in w
+    ]
+    assert "at most 50" in warning
+    assert warning == warning.lower()  # the path itself may hold capitals
+    text = listing.read_text()
+    assert all(f"{i:08x}{SIG_TAIL}" in text for i in range(60))
+    assert text.count("char-uuid") == 61

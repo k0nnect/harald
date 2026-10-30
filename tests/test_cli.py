@@ -9,6 +9,7 @@ from capture_helpers import write_capture
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
 from harald import arm, cli, library
+from harald.apk import ApkReport, Candidate
 
 
 @pytest.fixture(autouse=True)
@@ -193,6 +194,27 @@ def test_drive_runs_library_driver_with_uv(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "runner", runner)
     assert cli.main(["drive", "demo-lamp", "color", "--hex", "ff00aa"]) == 3
     assert calls == [["uv", "run", str(driver), "color", "--hex", "ff00aa"]]
+
+
+def test_apk_prints_the_totals_beside_the_capped_lists(tmp_path, monkeypatch, capsys):
+    uuid = "0000ffe1-0000-1000-8000-00805f9b34fb"
+    report = ApkReport(
+        path=tmp_path / "app.apk",
+        package="com.example.gadget",
+        framework="native",
+        gatt_uuids=[uuid],
+        candidates=[Candidate("char-uuid", "sources/a/Ble.java:3", "UUID u = x;")],
+        jadx_dir=tmp_path / "jadx",
+        warnings=["the report lists at most 50 gatt uuids"],
+        totals={"gatt_uuids": 61, "char-uuid": 61, "aes-key": 0},
+    )
+    monkeypatch.setattr(cli, "analyze_apk", lambda path: report)
+    assert cli.main(["apk", str(report.path)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "warning: the report lists at most 50 gatt uuids"
+    assert "totals: gatt_uuids 61, char-uuid 61, aes-key 0" in lines
+    assert f"  {uuid}" in lines
+    assert "  char-uuid  sources/a/Ble.java:3  UUID u = x;" in lines
 
 
 def test_missing_file_exits_2_with_path(tmp_path, capsys):

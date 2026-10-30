@@ -252,8 +252,11 @@ def build_server(
 
         detects the framework. for a native app it runs jadx and lists gatt uuids and
         file:line candidates (uuids, aes keys, base64 blobs, command builders) to open
-        under jadx_dir. flutter and react-native apps keep their ble code compiled, so
-        the warnings point to capture analysis instead. harald never downloads apps.
+        under jadx_dir, the app's own package first and third-party libraries skipped.
+        each list keeps at most 50 per kind; totals has the full counts, and when
+        anything was cut a warning names the file under jadx_dir that lists them all.
+        flutter and react-native apps keep their ble code compiled, so the warnings
+        point to capture analysis instead. harald never downloads apps.
         """
         report = apk.analyze_apk(Path(path))
         return asdict(report) | {
