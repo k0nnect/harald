@@ -9,7 +9,8 @@ Keys rule: an entry may carry a key only when `key_scope = "app-wide"` (identica
 on every unit, shipped in the vendor app). Per-unit and pairing keys never belong
 here, so `validate_meta` refuses any other entry that has `key_hex` set. It also
 refuses a `status`, `key_scope` or `cipher` outside the values below; `cipher` uses
-the drivers' names (`harald.analyze.MODES`) and is left out when there is none.
+the drivers' names (`harald.analyze.MODES`), and `"none"` or leaving it out both mean
+there is none.
 """
 
 from __future__ import annotations
@@ -29,7 +30,9 @@ KeyScope = Literal["app-wide", "none"]
 Status = Literal["decoded", "in progress", "wanted"]
 
 REQUIRED = ("name", "vendor", "status", "key_scope")
-_CIPHER_HINT = f"use {' or '.join(MODES)}, or leave cipher out when there is none"
+_CIPHER_HINT = (
+    f"use {' or '.join(MODES)}, or none (or leave cipher out) when there is none"
+)
 # field: (allowed values, hint when the value is something else)
 _CHOICES: dict[str, tuple[tuple[str, ...], str]] = {
     "status": (get_args(Status), "use decoded, in progress or wanted"),
@@ -67,7 +70,9 @@ def validate_meta(data: dict, slug: str) -> DeviceMeta:
     for field in REQUIRED:
         if field not in data:
             raise LibraryError(f"{slug}: missing {field}")
-    cipher = data.get("cipher") or None  # left out when there is none
+    cipher = data.get("cipher") or None  # "none" or left out when there is none
+    if cipher == "none":
+        cipher = None
     fields = {**data, "cipher": cipher}
     for field, (allowed, hint) in _CHOICES.items():
         value = fields[field]

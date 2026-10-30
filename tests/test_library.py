@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_per_unit_key_rejected(tmp_path):
     ("line", "message", "hint"),
     [
         ('cipher = "aes-128-ecb"', "unknown cipher: 'aes-128-ecb'", "aes-ecb"),
-        ('cipher = "none"', "unknown cipher: 'none'", "leave cipher out"),
+        ('cipher = "None"', "unknown cipher: 'None'", "leave cipher out"),
         ('status = "done"', "unknown status: 'done'", "in progress"),
         ('key_scope = "per-unit"', "unknown key_scope: 'per-unit'", "app-wide"),
     ],
@@ -88,6 +89,15 @@ def test_every_driver_cipher_is_accepted(tmp_path, cipher):
         f'key_hex = "{KEY}"\ncipher = "{cipher}"\n',
     )
     assert load_device("lamp", root=tmp_path).cipher == cipher
+
+
+def test_cipher_none_is_the_same_as_leaving_it_out(tmp_path):
+    entry = 'name = "lamp"\nvendor = "x"\nstatus = "wanted"\nkey_scope = "none"\n'
+    write_entry(tmp_path, "lamp", entry + 'cipher = "none"\n')
+    write_entry(tmp_path, "bare", entry)
+    meta = load_device("lamp", root=tmp_path)
+    assert meta.cipher is None
+    assert meta == replace(load_device("bare", root=tmp_path), slug="lamp")
 
 
 def test_wanted_device_without_key_ok(root):
