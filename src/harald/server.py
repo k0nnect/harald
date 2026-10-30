@@ -155,14 +155,15 @@ def build_server(
 
     @tool
     async def write_char(
-        address: str, char_uuid: str, data_hex: str, response: bool = False
+        address: str, char_uuid: str, data_hex: str, response: bool | None = None
     ) -> Record | Failure:
         """write hex bytes to a characteristic; returns the writes left.
 
         refused unless the human armed this device by running `harald arm <address>`
         in their own terminal. each write spends one from that budget, and
-        firmware-update services stay blocked. response=true waits for the device
-        to acknowledge the write.
+        firmware-update services stay blocked. by default it writes without response
+        when the characteristic allows that, and with response otherwise.
+        response=true waits for the device to acknowledge the write; false does not.
         """
         data = bytes.fromhex(data_hex)
         async with session(address) as conn:

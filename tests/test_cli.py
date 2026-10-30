@@ -5,9 +5,9 @@ import subprocess
 import pytest
 from bleak.exc import BleakError
 from capture_helpers import write_capture
-from fakes import CHR, FakeClient, FakeScanner
+from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
-from harald import cli, library
+from harald import arm, cli, library
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +68,24 @@ def test_write_after_arm_reaches_device(capsys):
     assert cli.main(["arm", "AA-11", "--writes", "5"]) == 0
     assert cli.main(["write", "AA-11", CHR, "0102"]) == 0
     assert "writes left: 4" in capsys.readouterr().out
+    # the default fake characteristic allows write-without-response, so that is used
     assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
+
+
+@pytest.mark.parametrize(
+    ("properties", "flags", "response"),
+    [
+        (["write-without-response"], [], False),
+        (["write"], [], True),
+        (["write-without-response"], ["--response"], True),
+        (["write"], ["--no-response"], False),
+    ],
+)
+def test_write_type_is_auto_unless_chosen(properties, flags, response):
+    FakeClient.reset(services=[FakeService(SVC, [FakeChar(CHR, 0x12, properties)])])
+    arm.arm("AA-11")
+    assert cli.main(["write", "AA-11", CHR, "01", *flags]) == 0
+    assert FakeClient.writes == [(CHR, b"\x01", response)]
 
 
 def test_drive_unknown_slug_exits_2(capsys):

@@ -46,7 +46,25 @@ async def test_write_after_arm_reaches_client():
     arm(ADDR)
     session = await connected()
     assert await session.write(CHR, b"\x01\x02") == 49
+    # the default fake characteristic allows write-without-response, so that is used
     assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
+
+
+async def test_write_with_response_when_the_char_is_write_only():
+    arm(ADDR)
+    session = await connected(
+        services=[FakeService(SVC, [FakeChar(CHR, 0x0012, ["write"])])]
+    )
+    await session.write(CHR, b"\x01")
+    assert FakeClient.writes == [(CHR, b"\x01", True)]
+
+
+async def test_write_type_can_be_chosen():
+    arm(ADDR)
+    session = await connected()
+    await session.write(CHR, b"\x01", response=True)
+    await session.write(CHR, b"\x02", response=False)
+    assert FakeClient.writes == [(CHR, b"\x01", True), (CHR, b"\x02", False)]
 
 
 async def test_write_gate_sees_real_parent_service():

@@ -3,7 +3,7 @@
 import zipfile
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from fakes import CHR, SVC, FakeClient, FakeScanner
+from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
 from harald.arm import arm
 from harald.server import EXPECTED_TOOLS, build_server
@@ -57,7 +57,19 @@ async def test_write_reaches_client_when_armed():
         server, "write_char", address=ADDR, char_uuid=CHR, data_hex="0102"
     )
     assert result == {"writes_left": 4}
+    # the default fake characteristic allows write-without-response, so that is used
     assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
+
+
+async def test_write_type_defaults_to_the_characteristic():
+    arm("aa-11", writes=5)
+    FakeClient.reset(services=[FakeService(SVC, [FakeChar(CHR, 0x12, ["write"])])])
+    server = build_server(client_cls=FakeClient)
+    await call(server, "write_char", address=ADDR, char_uuid=CHR, data_hex="01")
+    await call(
+        server, "write_char", address=ADDR, char_uuid=CHR, data_hex="02", response=False
+    )
+    assert FakeClient.writes == [(CHR, b"\x01", True), (CHR, b"\x02", False)]
 
 
 async def test_scan_tool_sorted():

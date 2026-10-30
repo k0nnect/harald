@@ -146,7 +146,9 @@ def _read(args: argparse.Namespace) -> int:
 
 def _write(args: argparse.Namespace) -> int:
     data = bytes.fromhex(args.hex)  # bad hex fails before connecting
-    left = _on_device(args.address, lambda conn: conn.write(args.char, data))
+    left = _on_device(
+        args.address, lambda conn: conn.write(args.char, data, response=args.response)
+    )
     print(f"wrote {data.hex()} to {args.char}; writes left: {left}")
     return 0
 
@@ -338,6 +340,13 @@ def _build_parser() -> argparse.ArgumentParser:
     write.add_argument("address")
     write.add_argument("char", help="characteristic uuid")
     write.add_argument("hex", help="the bytes to write, e.g. 7e0405")
+    write.add_argument(
+        "--response",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="wait for the device to acknowledge the write, or not. by default it "
+        "writes without response when the characteristic allows that",
+    )
 
     capture = sub.add_parser("capture", help="read phone captures")
     capture_sub = capture.add_subparsers(

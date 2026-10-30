@@ -114,11 +114,19 @@ class Session:
     async def read(self, char_uuid: str) -> bytes:
         return bytes(await self._client.read_gatt_char(normalize_uuid_str(char_uuid)))
 
-    async def write(self, char_uuid: str, data: bytes, response: bool = False) -> int:
-        """Spend one armed write, then write. Returns the writes left in the budget."""
+    async def write(
+        self, char_uuid: str, data: bytes, response: bool | None = None
+    ) -> int:
+        """Spend one armed write, then write. Returns the writes left in the budget.
+
+        `response` None writes without response when the characteristic's properties
+        include write-without-response, and with response otherwise.
+        """
         char_uuid = normalize_uuid_str(char_uuid)
-        service_uuid = await self._service_of(char_uuid)
+        service_uuid, char = await self._locate(char_uuid)
         grant = consume_write(self.address, service_uuid, char_uuid)
+        if response is None:
+            response = "write-without-response" not in char.properties
         await self._client.write_gatt_char(char_uuid, data, response=response)
         return grant.writes_left
 
@@ -143,13 +151,16 @@ class Session:
     async def close(self) -> None:
         await self._client.disconnect()
 
-    async def _service_of(self, char_uuid: str) -> str:
-        """The uuid of the one service holding `char_uuid`. Fails closed otherwise."""
+    async def _locate(self, char_uuid: str) -> tuple[str, CharInfo]:
+        """The uuid of the one service holding `char_uuid`, and the characteristic.
+
+        Fails closed when no service or more than one holds it.
+        """
         try:
             services = await self.services()
         except BleakError:  # not connected, so no services discovered
             services = []
-        owners = [s.uuid for s in services for c in s.chars if c.uuid == char_uuid]
+        owners = [(s.uuid, c) for s in services for c in s.chars if c.uuid == char_uuid]
         if len(owners) == 1:
             return owners[0]
         if owners:
