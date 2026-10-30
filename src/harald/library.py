@@ -7,7 +7,9 @@ the repo root so it is visible on GitHub; the wheel force-includes it as
 
 Keys rule: an entry may carry a key only when `key_scope = "app-wide"` (identical
 on every unit, shipped in the vendor app). Per-unit and pairing keys never belong
-here, so `validate_meta` refuses any other entry that has `key_hex` set.
+here, so `validate_meta` refuses any other entry that has `key_hex` set. It also
+refuses a `status`, `key_scope` or `cipher` outside the values below; `cipher` uses
+the drivers' names (`harald.analyze.MODES`) and is left out when there is none.
 """
 
 from __future__ import annotations
@@ -17,15 +19,23 @@ import tomllib
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import harald
+from harald.analyze import MODES
 from harald.errors import LibraryError
 
 KeyScope = Literal["app-wide", "none"]
 Status = Literal["decoded", "in progress", "wanted"]
 
 REQUIRED = ("name", "vendor", "status", "key_scope")
+_CIPHER_HINT = f"use {' or '.join(MODES)}, or leave cipher out when there is none"
+# field: (allowed values, hint when the value is something else)
+_CHOICES: dict[str, tuple[tuple[str, ...], str]] = {
+    "status": (get_args(Status), "use decoded, in progress or wanted"),
+    "key_scope": (get_args(KeyScope), "use app-wide, or none when there is no key"),
+    "cipher": (MODES, _CIPHER_HINT),
+}
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
@@ -57,6 +67,12 @@ def validate_meta(data: dict, slug: str) -> DeviceMeta:
     for field in REQUIRED:
         if field not in data:
             raise LibraryError(f"{slug}: missing {field}")
+    cipher = data.get("cipher") or None  # left out when there is none
+    fields = {**data, "cipher": cipher}
+    for field, (allowed, hint) in _CHOICES.items():
+        value = fields[field]
+        if value is not None and value not in allowed:
+            raise LibraryError(f"{slug}: unknown {field}: {value!r}", hint=hint)
     key_hex = data.get("key_hex") or None
     if key_hex is not None and data["key_scope"] != "app-wide":
         raise LibraryError(
@@ -71,7 +87,7 @@ def validate_meta(data: dict, slug: str) -> DeviceMeta:
         status=data["status"],
         key_scope=data["key_scope"],
         key_hex=key_hex,
-        cipher=data.get("cipher") or None,
+        cipher=cipher,
         service_uuids=list(data.get("service_uuids", [])),
         summary=data.get("summary", ""),
     )

@@ -33,7 +33,7 @@ def test_loads_app_wide_key_device(root):
     assert meta.slug == "demo-lamp"
     assert meta.key_scope == "app-wide"
     assert meta.key_hex == KEY
-    assert meta.cipher == "aes-128-ecb"
+    assert meta.cipher == "aes-ecb"
     assert meta.service_uuids == ["0000ffe0-0000-1000-8000-00805f9b34fb"]
     assert driver_path("demo-lamp", root=root) == root / "demo-lamp" / "driver.py"
     assert driver_path("demo-lamp", root=root).is_file()
@@ -52,6 +52,42 @@ def test_per_unit_key_rejected(tmp_path):
         load_device("leaky", root=tmp_path)
     assert "per-unit keys must not be published" in e.value.message
     assert "app-wide" in e.value.hint
+
+
+@pytest.mark.parametrize(
+    ("line", "message", "hint"),
+    [
+        ('cipher = "aes-128-ecb"', "unknown cipher: 'aes-128-ecb'", "aes-ecb"),
+        ('cipher = "none"', "unknown cipher: 'none'", "leave cipher out"),
+        ('status = "done"', "unknown status: 'done'", "in progress"),
+        ('key_scope = "per-unit"', "unknown key_scope: 'per-unit'", "app-wide"),
+    ],
+)
+def test_fields_with_fixed_values_are_checked(tmp_path, line, message, hint):
+    field = line.split(" = ")[0]
+    fields = {
+        "name": '"lamp"',
+        "vendor": '"x"',
+        "status": '"decoded"',
+        "key_scope": '"none"',
+    }
+    toml = "".join(f"{k} = {v}\n" for k, v in fields.items() if k != field) + line
+    write_entry(tmp_path, "lamp", toml + "\n")
+    with pytest.raises(LibraryError) as e:
+        load_device("lamp", root=tmp_path)
+    assert e.value.message == f"lamp: {message}"
+    assert hint in e.value.hint
+
+
+@pytest.mark.parametrize("cipher", ["aes-ecb", "aes-cbc-zero-iv"])
+def test_every_driver_cipher_is_accepted(tmp_path, cipher):
+    write_entry(
+        tmp_path,
+        "lamp",
+        'name = "lamp"\nvendor = "x"\nstatus = "decoded"\nkey_scope = "app-wide"\n'
+        f'key_hex = "{KEY}"\ncipher = "{cipher}"\n',
+    )
+    assert load_device("lamp", root=tmp_path).cipher == cipher
 
 
 def test_wanted_device_without_key_ok(root):

@@ -1,7 +1,10 @@
 """The public face of the repo: README.md, CONTRIBUTING.md and the banner."""
 
 import re
+import tomllib
 from pathlib import Path
+
+from harald.library import validate_meta
 
 REPO = Path(__file__).resolve().parents[1]
 README = REPO / "README.md"
@@ -123,6 +126,13 @@ def test_contributing_states_keys_rule():
     assert "app-wide" in text
     assert re.search(r"never[^.]*per-unit", text)
     assert re.search(r"never[^.]*pairing key", text)
+
+
+def test_contributing_example_entry_is_valid():
+    text = CONTRIBUTING.read_text(encoding="utf-8")
+    block = next(b for b in FENCE.findall(text) if b.startswith("```toml\n"))
+    data = tomllib.loads("\n".join(block.splitlines()[1:-1]))
+    assert validate_meta(data, "demo-lamp").cipher == "aes-ecb"
 
 
 def test_contributing_names_the_driver_constants():

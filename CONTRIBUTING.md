@@ -20,7 +20,7 @@ vendor = "example co"
 status = "decoded"            # decoded, in progress or wanted
 key_scope = "app-wide"        # app-wide, or none when there is no key
 key_hex = "00112233445566778899aabbccddeeff"
-cipher = "aes-128-ecb"
+cipher = "aes-ecb"            # aes-ecb or aes-cbc-zero-iv; leave out when there is none
 service_uuids = ["0000ffe0-0000-1000-8000-00805f9b34fb"]
 summary = "rgb lamp whose colour writes are encrypted with an app-wide key"
 ```
