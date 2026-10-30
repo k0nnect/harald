@@ -38,8 +38,8 @@ you need [uv](https://docs.astral.sh/uv/). then:
 uv tool install harald
 ```
 
-that puts `harald` on your path, and every command below uses it. if your shell can't
-find it, run `uv tool update-shell`. to try harald without installing it, run
+that puts `harald` on your path for the commands below. if your shell can't find it,
+run `uv tool update-shell`. to try harald without installing it, run
 `uvx harald --help`: uvx fetches harald and runs it once. tested on mac.
 
 the first time harald scans, macos asks whether your terminal app may use bluetooth.
