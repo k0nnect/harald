@@ -84,8 +84,23 @@ def test_arm_refuses_without_a_terminal(monkeypatch, capsys, stdin, stdout):
     err = capsys.readouterr().err
     assert err.startswith("error: harald arm only runs in an interactive terminal\n")
     assert "hint: run it yourself, in your own terminal" in err
+    assert "ask the human" in err
+    assert "cannot arm" not in err  # a fake terminal could get past this check
     assert err == err.lower()
     assert prompts == []  # refused before asking
+    assert arm.status() == []
+
+
+@pytest.mark.parametrize("stream", ["stdin", "stdout"])
+def test_arm_without_stdin_or_stdout_refuses_cleanly(monkeypatch, capsys, stream):
+    # pythonw and some launchers start with no stdin or stdout at all
+    prompts = at_terminal(monkeypatch)
+    with monkeypatch.context() as m:  # undone before capsys restores its streams
+        m.setattr(sys, stream, None)
+        assert cli.main(["arm", "aa-11"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: harald arm only runs in an interactive terminal\n")
+    assert prompts == []
     assert arm.status() == []
 
 

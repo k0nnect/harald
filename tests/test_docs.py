@@ -118,14 +118,21 @@ def test_speak_promises_script_not_home_assistant():
     assert "home assistant" not in section.lower()
 
 
-def test_safety_keeps_the_promise_and_names_the_gap():
+def test_safety_says_what_the_arm_gate_stops_and_what_it_cannot():
     safety = _section(README.read_text(encoding="utf-8"), SECTIONS[4])
     section = " ".join(safety.split())
-    assert "your agent can never approve its own writes" in section
     assert "type `arm`" in section  # harald arm asks the person at the terminal
-    # the residual gap: the grant is a file an agent could edit
+    assert "there is no mcp tool that arms" in section
+    # the gate stops a casual or accidental arm, not an agent set on getting round it
+    assert "stops casual or accidental arming by an agent" in section
     assert "`~/.harald/arm.json`" in section
-    assert "agent that can write files" in section
+    assert (
+        "any agent that can run arbitrary commands or write files on your machine "
+        "could get around"
+    ) in section
+    assert "the playbook's rule" in section
+    for overstated in ("can never approve", "can't be piped"):
+        assert overstated not in section
 
 
 def test_contributing_states_keys_rule():

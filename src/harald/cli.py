@@ -2,7 +2,9 @@
 
 This is the only place writes can be armed (`harald arm`); the mcp server has no
 tool for it. `harald arm` needs a terminal on stdin and stdout and a person typing
-`arm` at its prompt, so an agent can't arm through a pipe. Expected failures print
+`arm` at its prompt, so piping `arm` into it arms nothing. That stops casual or
+accidental arming by an agent; it is not a sandbox against one that can run any
+command or write any file on the machine. Expected failures print
 `error: <message>` and `  hint: <hint>` to stderr and exit with code 2, never a
 traceback.
 
@@ -99,13 +101,18 @@ def _scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_terminal(stream: Any) -> bool:
+    """True if `stream` is a terminal; a missing stream (None) is not one."""
+    return stream is not None and stream.isatty()
+
+
 def _arm(args: argparse.Namespace) -> int:
     """Arm only for a person at a terminal who types `arm`. There is no bypass flag."""
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not (_is_terminal(sys.stdin) and _is_terminal(sys.stdout)):
         raise HaraldError(
             "harald arm only runs in an interactive terminal",
             hint="run it yourself, in your own terminal; "
-            "an agent or a script cannot arm writes",
+            "an agent should ask the human to run it",
         )
     print(
         f"this lets harald write to {args.device}: "

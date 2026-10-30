@@ -5,9 +5,9 @@ comes back as `{"error": message, "hint": hint}`; a missing file, bad hex, malfo
 toml or a non-zip apk comes back as `{"error": <lowercased text>, "hint": ""}`.
 
 Writes go through `ble.Session.write`, which spends the human's `harald arm` budget.
-There is deliberately no tool that arms, disarms or enables writes, so the agent can
-never approve its own writes. Tool docstrings are the descriptions the agent reads,
-so they are lowercase like all other harald output.
+There is deliberately no tool that arms, disarms or enables writes, so the agent
+cannot approve its own writes through these tools. Tool docstrings are the
+descriptions the agent reads, so they are lowercase like all other harald output.
 """
 
 from __future__ import annotations
