@@ -101,6 +101,13 @@ def test_install_puts_harald_on_the_path():
     assert "`uvx harald" in _prose(README)  # the way to try it without installing
 
 
+def test_devices_table_asks_for_protocol_and_driver():
+    # ci needs a decoded entry's protocol.md and driver.py, not a protocol file alone
+    section = _section(_prose(README), SECTIONS[2])
+    row = next(line for line in section.splitlines() if "your device" in line)
+    assert "`protocol.md`" in row and "`driver.py`" in row
+
+
 def test_speak_promises_script_not_home_assistant():
     section = _section(_prose(README), SECTIONS[0])
     rows = [line for line in section.splitlines() if line.startswith("|")]

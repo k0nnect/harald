@@ -71,7 +71,7 @@ harald drive <slug> <command>        run a library device's driver
 | device | what harald found | status |
 | :--- | :--- | :--- |
 | istrip+ led strip | being worked out on real hardware | in progress |
-| your device | open a pull request with its protocol file | wanted |
+| your device | open a pull request with its `device.toml`, `protocol.md` and `driver.py` | wanted |
 
 each decoded device lives in [`devices/`](devices/) with its protocol written up and a
 standalone driver. `harald devices` lists them, and `harald drive <slug> <command>`

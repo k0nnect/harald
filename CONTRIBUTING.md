@@ -35,7 +35,8 @@ the playbook leaves your agent's work in `harald-work/<slug>/` (`protocol.md` an
    gadget, using values the vendor app's capture never contained. replaying captured
    bytes does not count as decoded.
 3. run `uv run pytest -q`. a test loads every entry in `devices/`, so a broken entry,
-   a missing file or a key that breaks the keys rule fails ci.
+   a decoded entry without its `protocol.md` or `driver.py`, or a key that breaks the
+   keys rule fails ci. a `wanted` or `in progress` entry may be a `device.toml` alone.
 
 ## the keys rule
 

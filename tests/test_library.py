@@ -126,12 +126,31 @@ def test_devices_root_resolves_in_dev_checkout():
     assert devices_root() == REPO / "devices"
 
 
+def check_entries(root: Path | None = None) -> None:
+    """The ci gate on a library: loading enforces the keys rule and the allowed
+    values, and a decoded entry needs its protocol.md and driver.py. an entry that
+    is wanted or in progress may be a device.toml alone."""
+    for meta in list_devices(root=root):
+        if meta.status == "decoded":
+            assert driver_path(meta.slug, root=root).is_file(), meta.slug
+            assert protocol_path(meta.slug, root=root).is_file(), meta.slug
+
+
 def test_shipped_entries_valid():
-    # the real devices/ library: loading enforces the keys rule, so ci fails on any
-    # shipped entry that carries a per-unit or pairing key, or lacks its files.
-    for meta in list_devices():
-        assert driver_path(meta.slug).is_file(), meta.slug
-        assert protocol_path(meta.slug).is_file(), meta.slug
+    check_entries()  # the real devices/ library
+
+
+def test_entry_gate_needs_files_only_when_decoded(tmp_path):
+    base = 'name = "x"\nvendor = "x"\nkey_scope = "none"\n'
+    write_entry(tmp_path, "fan", base + 'status = "wanted"\n')
+    write_entry(tmp_path, "kettle", base + 'status = "in progress"\n')
+    check_entries(tmp_path)
+    write_entry(tmp_path, "lamp", base + 'status = "decoded"\n')
+    (tmp_path / "lamp" / "driver.py").write_text("")
+    with pytest.raises(AssertionError, match="lamp"):  # no protocol.md
+        check_entries(tmp_path)
+    (tmp_path / "lamp" / "protocol.md").write_text("")
+    check_entries(tmp_path)
 
 
 @pytest.mark.parametrize("slug", ["../x", "/tmp/x", "a/b", "", "Upper"])
