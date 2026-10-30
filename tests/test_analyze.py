@@ -61,6 +61,23 @@ def test_plain_payloads_not_encrypted():
     assert looks_encrypted(payloads) is True
 
 
+def test_shared_padding_block_does_not_hide_encryption():
+    # a whole-block plaintext gets a whole padding block, and under ecb that block
+    # encrypts the same in every payload
+    padded = [aes_ecb_encrypt(KEY, p + bytes([16] * 16)) for p in plains]
+    assert len({p[16:] for p in padded}) == 1
+    assert looks_encrypted(padded) is True
+    # a shared block is ignored, but the plain block left over still decides
+    assert looks_encrypted([p + bytes(16) for p in plains]) is False
+
+
+def test_identical_payloads_do_not_look_encrypted():
+    assert looks_encrypted([payloads[0]] * 2) is False
+    assert looks_encrypted([payloads[0]] * 3) is False
+    # one payload has nothing to compare against, so only its bytes count
+    assert looks_encrypted(payloads[:1]) is True
+
+
 def test_try_keys_finds_correct_key():
     results = try_keys(payloads, [bytes(16), KEY, bytes(range(1, 17))])
     assert results[0].key_hex == KEY.hex()

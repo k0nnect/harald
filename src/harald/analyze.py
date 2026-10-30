@@ -100,16 +100,42 @@ def byte_entropy(data: bytes) -> float:
 def looks_encrypted(payloads: list[bytes]) -> bool:
     """Guess whether payloads are block-cipher output rather than plain commands.
 
-    True when every payload is a non-empty multiple of 16 bytes, no position is
-    constant across them (checked once there are at least 3), and the mean
-    per-payload byte entropy is at least 3.5 bits.
+    Every payload must be a non-empty multiple of 16 bytes. They are judged per
+    16-byte block: a block that is byte-identical in every payload, such as the
+    padding block a whole-block plaintext gets under ecb, tells nothing and is left
+    out. Over the blocks that remain, True when no position is constant across the
+    payloads (checked once there are at least 3) and the mean per-payload byte
+    entropy is at least 3.5 bits. Fully identical payloads give False.
     """
     if not payloads or any(not p or len(p) % BLOCK for p in payloads):
         return False
-    if len(payloads) >= 3 and diff_payloads(payloads).constant:
+    varying = [v for v in _without_shared_blocks(payloads) if v]
+    if not varying:  # every block is shared: the payloads are identical
         return False
-    mean = sum(byte_entropy(p) for p in payloads) / len(payloads)
+    if len(varying) >= 3 and diff_payloads(varying).constant:
+        return False
+    mean = sum(byte_entropy(v) for v in varying) / len(varying)
     return mean >= ENTROPY_THRESHOLD
+
+
+def _without_shared_blocks(payloads: list[bytes]) -> list[bytes]:
+    """Each payload minus the 16-byte blocks that every payload has byte-identical.
+
+    A single payload has nothing to compare against, so it comes back whole.
+    """
+    if len(payloads) < 2:
+        return list(payloads)
+    longest = max(len(p) for p in payloads)
+    # a payload too short for block i gives b"" there, so that block is not shared
+    shared = {
+        i
+        for i in range(0, longest, BLOCK)
+        if len({p[i : i + BLOCK] for p in payloads}) == 1
+    }
+    return [
+        b"".join(p[i : i + BLOCK] for i in range(0, len(p), BLOCK) if i not in shared)
+        for p in payloads
+    ]
 
 
 def try_keys(payloads: list[bytes], keys: list[bytes]) -> list[KeyResult]:

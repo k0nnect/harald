@@ -116,6 +116,16 @@ def test_driver_step_covers_gadgets_that_hide_their_service():
         assert "set `name_hint`" in step, agent
 
 
+def test_app_step_also_follows_random_looking_bytes():
+    # looks_encrypted misses stream ciphers and other odd lengths, so random-looking
+    # varying bytes send the agent to the app step too
+    for agent in PLAYBOOK_AGENTS:
+        method = " ".join(_method(agent).split())
+        gate = method[method.index("4. compare payloads") : method.index("6. ask")]
+        assert "`looks_encrypted` as true, or the varying bytes look random" in gate
+        assert "5. if the payloads look encrypted or their varying bytes look" in gate
+
+
 def test_install_writes_expected_filename(tmp_path):
     skill = install_playbook("claude-code", tmp_path)
     assert skill == tmp_path / "SKILL.md"

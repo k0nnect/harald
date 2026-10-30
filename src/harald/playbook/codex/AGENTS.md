@@ -81,9 +81,11 @@ follow the steps in order. nothing here is specific to one device.
    bytes carry the value. call `guess_checks` on single payloads to spot a trailing
    checksum or a length byte. save one hypothesis per command with `save_note`:
    layout, value encoding and checksum. if `diff` reports `looks_encrypted` as true,
-   do step 5 next; otherwise skip it.
+   or the varying bytes look random (they change with no pattern that follows the
+   values you set), do step 5 next; otherwise skip it.
 
-5. if the payloads look encrypted, recover an app-wide key from the vendor app.
+5. if the payloads look encrypted or their varying bytes look random, recover an
+   app-wide key from the vendor app.
    ask the human for the apk of the vendor app they already use. they can download
    it from apkmirror, which verifies signatures, or with `apkeep`. harald never
    downloads apps. call `analyze_apk` on the file; the human can run
