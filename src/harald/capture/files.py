@@ -64,14 +64,33 @@ def _error(message: str) -> CaptureFormatError:
     return CaptureFormatError(message, hint=HINT)
 
 
+def _walks(raw: bytes, order: str) -> bool:
+    """True if `raw` is a non-empty chain of pklg records in this byte order to eof."""
+    offset = 0
+    while offset < len(raw):
+        if len(raw) - offset < 4:
+            return False
+        (length,) = struct.unpack_from(order + "I", raw, offset)
+        if length < _PKLG_MIN_LEN or length > len(raw) - offset - 4:
+            return False
+        offset += 4 + length
+    return offset > 0
+
+
 def _pklg_byte_order(raw: bytes) -> str:
-    """Big-endian unless the first record's len is impossible that way; then little."""
-    if len(raw) >= 4:
-        remaining = len(raw) - 4
-        for order in (">", "<"):
-            (length,) = struct.unpack_from(order + "I", raw)
-            if _PKLG_MIN_LEN <= length <= remaining:
-                return order
+    """The order whose record chain walks the whole file; big-endian if both do.
+
+    Wireshark's tiebreak: a big-endian first len with zero low 16 bits and non-zero
+    high 16 bits is really a small little-endian len, so little-endian wins then.
+    """
+    big, little = _walks(raw, ">"), _walks(raw, "<")
+    if big and little:
+        (length,) = struct.unpack_from(">I", raw)
+        return "<" if length & 0xFFFF == 0 and length >> 16 else ">"
+    if big:
+        return ">"
+    if little:
+        return "<"
     raise _error("not a packetlogger or btsnoop capture")
 
 
@@ -79,13 +98,9 @@ def _read_pklg(raw: bytes) -> list[HciRecord]:
     header = struct.Struct(_pklg_byte_order(raw) + "III")
     records: list[HciRecord] = []
     offset = 0
-    while offset < len(raw):
-        if len(raw) - offset < header.size + 1:
-            raise _error(f"packetlogger record at offset {offset} is cut short")
+    while offset < len(raw):  # _pklg_byte_order already checked every len
         length, secs, usecs = header.unpack_from(raw, offset)
         end = offset + 4 + length
-        if length < _PKLG_MIN_LEN or end > len(raw):
-            raise _error(f"packetlogger record at offset {offset} has a bad length")
         kind = _PKLG_KINDS.get(raw[offset + header.size])
         if kind is not None:
             data = raw[offset + header.size + 1 : end]
