@@ -17,6 +17,9 @@ follow the steps in order. nothing here is specific to one device.
 
 - scope: harald is for gadgets the user owns, for interoperability and research.
   do not use it on anyone else's device.
+- install: the human runs `uv tool install harald` once, which puts the `harald` cli
+  on their path; the commands below assume it. `uvx harald ...` runs harald without
+  installing it, for a quick try.
 - writes need the human. `write_char` is refused until the human runs
   `harald arm <address> --writes n --minutes m` in their own terminal. no tool can
   arm, so ask, and never try to get around the gate. each write spends one from the
@@ -113,12 +116,13 @@ follow the steps in order. nothing here is specific to one device.
    human to arm again.
 
 7. write the protocol and a standalone driver.
-   harald runs through uvx, so a plain `import harald` fails on your path. write a
-   small python script, for example `harald-work/<slug>/render.py`, that builds a
-   `DriverSpec` from `harald.templates` with one `DriverCommand` per command you
-   verified in step 6, renders it with `render_protocol` and `render_driver`, and
-   writes the results to `harald-work/<slug>/protocol.md` and
-   `harald-work/<slug>/driver.py`. run it with `uvx --from harald python <script>`.
+   harald lives in its own environment, as a uv tool or through uvx, so a plain
+   `import harald` fails on your path. write a small python script, for example
+   `harald-work/<slug>/render.py`, that builds a `DriverSpec` from
+   `harald.templates` with one `DriverCommand` per command you verified in step 6,
+   renders it with `render_protocol` and `render_driver`, and writes the results to
+   `harald-work/<slug>/protocol.md` and `harald-work/<slug>/driver.py`. run it with
+   `uvx --from harald python <script>`.
    a `DriverCommand` has a `name`, its `params` and a `payload_py`: one python
    expression over the params, which arrive as strings, giving the plaintext bytes.
    it may call `rgb_bytes(value)`, which turns a colour name such as pink, or

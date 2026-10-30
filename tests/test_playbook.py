@@ -101,6 +101,13 @@ def test_human_only_commands_are_left_to_the_human():
         ) in rule, agent
 
 
+def test_install_matches_the_readme():
+    for agent in PLAYBOOK_AGENTS:
+        rules = " ".join(_method(agent).split("## the method", 1)[0].split())
+        assert "`uv tool install harald`" in rules, agent
+        assert "`uvx harald" in rules, agent
+
+
 def test_driver_step_covers_gadgets_that_hide_their_service():
     for agent in PLAYBOOK_AGENTS:
         method = " ".join(_method(agent).split())

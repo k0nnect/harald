@@ -78,6 +78,14 @@ def test_readme_claims_tested_on_mac():
         assert system not in text, f"README.md mentions {system}"
 
 
+def test_install_puts_harald_on_the_path():
+    # every later block runs bare `harald`, so the install step has to provide it
+    section = _section(README.read_text(encoding="utf-8"), SECTIONS[1])
+    first_block = FENCE.search(section).group()
+    assert first_block.splitlines()[1:-1] == ["uv tool install harald"]
+    assert "`uvx harald" in _prose(README)  # the way to try it without installing
+
+
 def test_speak_promises_script_not_home_assistant():
     section = _section(_prose(README), SECTIONS[0])
     rows = [line for line in section.splitlines() if line.startswith("|")]
