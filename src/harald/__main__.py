@@ -1,3 +1,6 @@
-from harald import __version__
+import sys
 
-print(f"harald {__version__}")
+from harald.cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())
