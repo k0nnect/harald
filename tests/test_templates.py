@@ -127,11 +127,24 @@ def test_driver_declares_its_dependencies_for_uv(spec):
 def test_driver_knows_colour_names_and_hex(spec, tmp_path):
     driver = load_driver(spec, tmp_path)
     assert set(BASIC_CSS) <= set(driver.COLORS)
-    assert driver.rgb_bytes("pink") == bytes.fromhex("ffc0cb")
+    assert driver.rgb_bytes("pink") == bytes.fromhex("ff1493")
     assert driver.rgb_bytes("Red") == bytes.fromhex("ff0000")
     assert driver.rgb_bytes("ff8800") == bytes.fromhex("ff8800")
     with pytest.raises(driver.DriverError, match="unknown colour: chartreuse-ish"):
         driver.rgb_bytes("chartreuse-ish")
+
+
+def test_driver_colours_are_saturated_for_leds(spec, tmp_path):
+    # an led strip mixes light, so a pale css colour such as pink (ffc0cb) shows as
+    # near white. every named colour is a grey (r == g == b) or nearly fully saturated.
+    driver = load_driver(spec, tmp_path)
+    for name, value in driver.COLORS.items():
+        r, g, b = bytes.fromhex(value)
+        if r == g == b:
+            continue
+        top, low = max(r, g, b), min(r, g, b)
+        assert (top - low) / top >= 0.9, name
+    assert driver.COLORS["green"] == "00ff00"  # css green is a dark green
 
 
 @pytest.mark.parametrize(
@@ -153,7 +166,7 @@ def test_driver_color_pink_writes_without_response_when_allowed(spec, tmp_path, 
     assert char.uuid == CHR
     # the default fake characteristic has write-without-response
     assert response is False
-    expected = b"\x7e\x00\x05\x03" + bytes.fromhex("ffc0cb")
+    expected = b"\x7e\x00\x05\x03" + bytes.fromhex("ff1493")
     assert aes_decrypt(data, modes.ECB()) == expected.ljust(16, b"\x00")
     assert capsys.readouterr().out == "sent color to AA-11\n"
 

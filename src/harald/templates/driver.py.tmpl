@@ -50,8 +50,10 @@ NOT_FOUND_HINT = (
     "connection), move closer, or pass --address"
 )
 
-# colour names for rgb_bytes, with their css values. css green is a dark green;
-# lime is full green.
+# colour names for rgb_bytes, with values for leds rather than screens. an led strip
+# mixes light, so a pale css colour such as pink (ffc0cb) shows as near white: each
+# colour here is saturated instead, e.g. pink is deep pink, and green is full green.
+# maroon, olive, teal, navy, gray and silver are the dim versions of their colours.
 COLORS = {
     "black": "000000",
     "silver": "c0c0c0",
@@ -59,10 +61,10 @@ COLORS = {
     "white": "ffffff",
     "maroon": "800000",
     "red": "ff0000",
-    "purple": "800080",
+    "purple": "b000ff",
     "fuchsia": "ff00ff",
     "magenta": "ff00ff",
-    "green": "008000",
+    "green": "00ff00",
     "lime": "00ff00",
     "olive": "808000",
     "yellow": "ffff00",
@@ -71,12 +73,12 @@ COLORS = {
     "teal": "008080",
     "aqua": "00ffff",
     "cyan": "00ffff",
-    "orange": "ffa500",
-    "pink": "ffc0cb",
-    "violet": "ee82ee",
-    "indigo": "4b0082",
-    "gold": "ffd700",
-    "brown": "a52a2a",
+    "orange": "ff4500",
+    "pink": "ff1493",
+    "violet": "8000ff",
+    "indigo": "4000ff",
+    "gold": "ff8c00",
+    "brown": "a52a00",
 }
 
 
