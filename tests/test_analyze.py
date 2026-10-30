@@ -8,6 +8,11 @@ def aes_ecb_encrypt(key: bytes, plain: bytes) -> bytes:
     return encryptor.update(plain) + encryptor.finalize()
 
 
+def aes_cbc_zero_iv_encrypt(key: bytes, plain: bytes) -> bytes:
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(bytes(16))).encryptor()
+    return encryptor.update(plain) + encryptor.finalize()
+
+
 KEY = bytes(range(16))
 plains = [
     bytes([0x54, 0x10, c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
@@ -34,6 +39,12 @@ def test_sum8_detected():
     assert "sum8 at -1" not in guess_checks(body + bytes([(sum(body) + 1) & 0xFF]))
 
 
+def test_length_byte_detected():
+    # counts the bytes after it (9 - 2) and the bytes after the header byte (8 - 1)
+    assert "length at 1" in guess_checks(bytes.fromhex("7e070503ff000010ef"))
+    assert "length at 1" in guess_checks(bytes.fromhex("7e070503ff0000ef"))
+
+
 def test_crc16_le_detected():
     # crc-16/ccitt-false check value for b"123456789" is 0x29b1
     checks = guess_checks(b"123456789" + bytes([0xB1, 0x29]))
@@ -56,3 +67,12 @@ def test_try_keys_finds_correct_key():
     assert results[0].mode == "aes-ecb"
     assert results[0].score >= 0.9
     assert results[0].samples[0] == plains[0].hex()
+
+
+def test_try_keys_prefers_cbc_when_later_blocks_only_decode_in_cbc():
+    two_block = [p + bytes(range(16, 32)) for p in plains]
+    cbc_payloads = [aes_cbc_zero_iv_encrypt(KEY, p) for p in two_block]
+    results = try_keys(cbc_payloads, [bytes(16), KEY, bytes(range(1, 17))])
+    assert results[0].key_hex == KEY.hex()
+    assert results[0].mode == "aes-cbc-zero-iv"
+    assert results[0].samples[0] == two_block[0].hex()

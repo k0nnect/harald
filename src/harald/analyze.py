@@ -52,8 +52,8 @@ def diff_payloads(payloads: list[bytes]) -> DiffReport:
 def guess_checks(payload: bytes) -> list[str]:
     """Name the common integrity and length fields this payload is consistent with.
 
-    A length byte at position i matches when it equals the total length or the
-    number of bytes after it.
+    A length byte at position i matches when it equals the total length n, the
+    bytes from it onward (n - i), or the bytes after it (n - i - 1).
     """
     n = len(payload)
     found: list[str] = []
@@ -67,7 +67,7 @@ def guess_checks(payload: bytes) -> list[str]:
         if xor == last:
             found.append("xor8 at -1")
     for i in (0, 1):
-        if n > i and payload[i] in (n, n - i - 1):
+        if n > i and payload[i] in (n, n - i, n - i - 1):
             found.append(f"length at {i}")
     if n >= 3:
         crc = crc16_ccitt(payload[:-2])
@@ -116,28 +116,31 @@ def try_keys(payloads: list[bytes], keys: list[bytes]) -> list[KeyResult]:
     """Decrypt payloads with each candidate key and mode, best-scoring first.
 
     Keys that are not 16, 24 or 32 bytes and payloads that are not a non-empty
-    multiple of 16 bytes are skipped. For one block, cbc with a zero iv decrypts
-    exactly like ecb, so the right key ties across both modes; ecb is tried
-    first and the sort is stable, so ecb ranks first on a tie.
+    multiple of 16 bytes are skipped. With a zero iv, cbc's first plaintext
+    block equals ecb's for any payload length, so `score` (first block only)
+    always ties across the two modes. Ties are broken by the fraction of
+    positions constant over the whole shortest plaintext, which tells the modes
+    apart from the second block on. Single-block payloads still tie there too;
+    ecb is tried first and the sort is stable, so ecb ranks first.
     """
     blocks = [p for p in payloads if p and len(p) % BLOCK == 0]
     if not blocks:
         return []
-    results: list[KeyResult] = []
+    ranked: list[tuple[float, float, KeyResult]] = []
     for key in keys:
         if len(key) not in AES_KEY_SIZES:
             continue
         for mode in MODES:
             plain = [_decrypt(key, mode, p) for p in blocks]
-            results.append(
-                KeyResult(
-                    key_hex=key.hex(),
-                    mode=mode,
-                    score=_score(plain),
-                    samples=[p.hex() for p in plain[:3]],
-                )
+            result = KeyResult(
+                key_hex=key.hex(),
+                mode=mode,
+                score=_score(plain),
+                samples=[p.hex() for p in plain[:3]],
             )
-    return sorted(results, key=lambda r: r.score, reverse=True)
+            ranked.append((result.score, _full_score(plain), result))
+    ranked.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [result for _, _, result in ranked]
 
 
 def _decrypt(key: bytes, mode: str, data: bytes) -> bytes:
@@ -151,3 +154,9 @@ def _score(plain: list[bytes]) -> float:
     constant = sum(len({p[i] for p in plain}) == 1 for i in range(BLOCK)) / BLOCK
     agree = Counter(p[0] for p in plain).most_common(1)[0][1] / len(plain)
     return min(1.0, constant + 0.5 * agree)
+
+
+def _full_score(plain: list[bytes]) -> float:
+    """Fraction of positions, over the shortest plaintext, constant across all."""
+    shortest = min(len(p) for p in plain)
+    return len(diff_payloads(plain).constant) / shortest
