@@ -90,6 +90,14 @@ def test_devices_root_resolves_in_dev_checkout():
     assert devices_root() == REPO / "devices"
 
 
+def test_shipped_entries_valid():
+    # the real devices/ library: loading enforces the keys rule, so ci fails on any
+    # shipped entry that carries a per-unit or pairing key, or lacks its files.
+    for meta in list_devices():
+        assert driver_path(meta.slug).is_file(), meta.slug
+        assert protocol_path(meta.slug).is_file(), meta.slug
+
+
 @pytest.mark.parametrize("slug", ["../x", "/tmp/x", "a/b", "", "Upper"])
 def test_bad_slug_rejected_without_escaping_root(tmp_path, slug):
     root = tmp_path / "root"
