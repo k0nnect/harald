@@ -1,0 +1,263 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "bleak>=3.0",
+#     "cryptography>=44",
+# ]
+# ///
+"""a standalone driver for one bluetooth le gadget, written by harald.
+
+it has its own command line and does not need harald. run it with uv, which installs
+bleak and cryptography from the block above:
+
+    uv run driver.py --help
+    uv run driver.py <command> [values]
+
+each command builds a plaintext payload, encrypts it when CIPHER is set, and writes
+it to WRITE_CHAR_UUID: without response when the characteristic allows that, with
+response otherwise. with no --address and no ADDRESS_HINT, it scans for a device
+advertising SERVICE_UUID.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+
+from bleak import BleakClient, BleakScanner
+from bleak.exc import (
+    BleakBluetoothNotAvailableError,
+    BleakDeviceNotFoundError,
+    BleakError,
+)
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+DEVICE = $device
+VENDOR = $vendor
+ADDRESS_HINT = $address_hint  # empty: scan for SERVICE_UUID
+SERVICE_UUID = $service_uuid
+WRITE_CHAR_UUID = $write_char_uuid
+CIPHER = $cipher  # None, "aes-ecb" or "aes-cbc-zero-iv"
+KEY_HEX = $key_hex
+SCAN_SECONDS = 5.0
+NOT_FOUND_HINT = (
+    "switch the gadget on, close the vendor app on your phone (gadgets accept one "
+    "connection), move closer, or pass --address"
+)
+
+# colour names for rgb_bytes, with their css values. css green is a dark green;
+# lime is full green.
+COLORS = {
+    "black": "000000",
+    "silver": "c0c0c0",
+    "gray": "808080",
+    "white": "ffffff",
+    "maroon": "800000",
+    "red": "ff0000",
+    "purple": "800080",
+    "fuchsia": "ff00ff",
+    "magenta": "ff00ff",
+    "green": "008000",
+    "lime": "00ff00",
+    "olive": "808000",
+    "yellow": "ffff00",
+    "navy": "000080",
+    "blue": "0000ff",
+    "teal": "008080",
+    "aqua": "00ffff",
+    "cyan": "00ffff",
+    "orange": "ffa500",
+    "pink": "ffc0cb",
+    "violet": "ee82ee",
+    "indigo": "4b0082",
+    "gold": "ffd700",
+    "brown": "a52a2a",
+}
+
+
+class DriverError(Exception):
+    """An expected failure, printed as an error line and a hint line."""
+
+    def __init__(self, message: str, hint: str = "") -> None:
+        super().__init__(message)
+        self.message = message
+        self.hint = hint
+
+
+def rgb_bytes(value: str) -> bytes:
+    """Three bytes r, g, b from a colour name in COLORS or 6-digit hex such as ff8800."""
+    text = value.strip().lower()
+    text = COLORS.get(text, text).removeprefix("#")
+    if len(text) != 6 or any(c not in "0123456789abcdef" for c in text):
+        raise DriverError(
+            f"unknown colour: {value}",
+            "use a colour name such as pink or red, or 6-digit hex such as ff8800",
+        )
+    return bytes.fromhex(text)
+
+
+# one function per command. each takes the command's values, as strings from the
+# command line, and returns the plaintext payload.
+
+
+$commands
+
+
+COMMANDS = {  # command name: (payload function, its values)
+$command_table
+}
+
+
+def build_payload(command: str, values: list[str]) -> bytes:
+    """The plaintext payload for `command` with these values."""
+    function, _params = COMMANDS[command]
+    try:
+        payload = function(*values)
+    except (ValueError, TypeError, OverflowError) as exc:  # e.g. int("abc")
+        raise DriverError(
+            f"bad value for {command}: {str(exc).lower()}",
+            f"see uv run driver.py {command} --help",
+        ) from exc
+    if not isinstance(payload, (bytes, bytearray)):
+        raise DriverError(
+            f"{function.__name__} returned {type(payload).__name__.lower()}, not bytes",
+            f"make {function.__name__} in driver.py return bytes",
+        )
+    return bytes(payload)
+
+
+def encrypt(plaintext: bytes) -> bytes:
+    """`plaintext` encrypted with KEY_HEX in CIPHER's mode, or as it is without one.
+
+    nothing is padded: the plaintext has to be whole 16-byte blocks.
+    """
+    if CIPHER is None:
+        return plaintext
+    if CIPHER == "aes-ecb":
+        mode = modes.ECB()
+    elif CIPHER == "aes-cbc-zero-iv":
+        mode = modes.CBC(bytes(16))
+    else:
+        raise DriverError(
+            f"unknown cipher: {CIPHER}",
+            "set CIPHER to None, aes-ecb or aes-cbc-zero-iv",
+        )
+    if not plaintext or len(plaintext) % 16:
+        raise DriverError(
+            f"the plaintext is {len(plaintext)} bytes; aes needs whole 16-byte blocks",
+            "this driver adds no padding, so pad the payload in its command's function",
+        )
+    encryptor = Cipher(algorithms.AES(bytes.fromhex(KEY_HEX)), mode).encryptor()
+    return encryptor.update(plaintext) + encryptor.finalize()
+
+
+async def find_device():
+    """Scan for SCAN_SECONDS and return the strongest device advertising SERVICE_UUID."""
+    print(f"scanning {SCAN_SECONDS:g} s for a device advertising {SERVICE_UUID}")
+    found = await BleakScanner.discover(
+        timeout=SCAN_SECONDS, return_adv=True, service_uuids=[SERVICE_UUID]
+    )
+    matches = [
+        (adv.rssi, device)
+        for device, adv in found.values()
+        if SERVICE_UUID in (uuid.lower() for uuid in adv.service_uuids)
+    ]
+    if not matches:
+        raise DriverError(f"no device advertising {SERVICE_UUID} found", NOT_FOUND_HINT)
+    device = max(matches, key=lambda match: match[0])[1]
+    if len(matches) > 1:
+        print(f"found {len(matches)} devices; using the strongest, {device.address}")
+    return device
+
+
+async def send(address: str, payload: bytes) -> str:
+    """Write `payload` to WRITE_CHAR_UUID on the gadget. Returns the address used."""
+    target = address
+    if not address:
+        target = await find_device()
+        address = target.address
+    client = BleakClient(target)
+    try:
+        await client.connect()
+    except (BleakDeviceNotFoundError, TimeoutError) as exc:
+        raise DriverError(f"device {address} not found", NOT_FOUND_HINT) from exc
+    try:
+        # look in SERVICE_UUID first, then anywhere else on the gadget
+        services = sorted(client.services, key=lambda s: s.uuid.lower() != SERVICE_UUID)
+        chars = [
+            char
+            for service in services
+            for char in service.characteristics
+            if char.uuid.lower() == WRITE_CHAR_UUID
+        ]
+        if not chars:
+            raise DriverError(
+                f"characteristic {WRITE_CHAR_UUID} not found on {address}",
+                "check that the address belongs to this gadget, or pass --address",
+            )
+        response = "write-without-response" not in chars[0].properties
+        await client.write_gatt_char(chars[0], payload, response=response)
+    finally:
+        await client.disconnect()
+    return address
+
+
+def add_address(parser: argparse.ArgumentParser, default: str) -> None:
+    parser.add_argument(
+        "--address",
+        default=default,
+        help=f"the gadget's address; empty scans for a device advertising {SERVICE_UUID}",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=f"control {DEVICE} over bluetooth le. written by harald.",
+        epilog=f"default address: {ADDRESS_HINT or 'none, so it scans'}",
+    )
+    add_address(parser, ADDRESS_HINT)
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+    for name, (_function, params) in COMMANDS.items():
+        command = commands.add_parser(name, help=f"send {name}")
+        for param in params:
+            command.add_argument(param)
+        add_address(command, argparse.SUPPRESS)  # so --address works after the values
+    return parser
+
+
+def fail(message: str, hint: str) -> int:
+    print(f"error: {message}", file=sys.stderr)
+    if hint:
+        print(f"  hint: {hint}", file=sys.stderr)
+    return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    _function, params = COMMANDS[args.command]
+    values = [getattr(args, param) for param in params]
+    try:
+        payload = encrypt(build_payload(args.command, values))
+        address = asyncio.run(send(args.address, payload))
+    except DriverError as exc:
+        return fail(exc.message, exc.hint)
+    except BleakBluetoothNotAvailableError:
+        return fail(
+            "bluetooth is off or not allowed for this app",
+            "turn bluetooth on and allow your terminal app in "
+            "system settings > privacy & security > bluetooth",
+        )
+    except (BleakError, TimeoutError) as exc:
+        return fail(
+            f"bluetooth error: {str(exc).lower() or type(exc).__name__.lower()}",
+            "check that the gadget is on and in range, then try again",
+        )
+    except KeyboardInterrupt:
+        return 130
+    print(f"sent {args.command} to {address}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

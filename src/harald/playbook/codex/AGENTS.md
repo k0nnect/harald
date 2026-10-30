@@ -106,14 +106,23 @@ follow the steps in order. nothing here is specific to one device.
    human to arm again.
 
 7. write the protocol and a standalone driver.
-   fill harald's templates (`harald.templates`: a `DriverSpec` with one
-   `DriverCommand` per verified command, rendered by `render_protocol` and
-   `render_driver`) to produce `harald-work/<slug>/protocol.md` and a standalone
-   `harald-work/<slug>/driver.py`. the protocol lists the service and
-   characteristic uuids, the cipher and each command's payload layout. the driver
-   has its own small cli, for example `on`, `off` and `brightness 50`, and does not
-   import harald. include only commands you verified in step 6. the human runs it
+   harald runs through uvx, so a plain `import harald` fails on your path. write a
+   small python script, for example `harald-work/<slug>/render.py`, that builds a
+   `DriverSpec` from `harald.templates` with one `DriverCommand` per command you
+   verified in step 6, renders it with `render_protocol` and `render_driver`, and
+   writes the results to `harald-work/<slug>/protocol.md` and
+   `harald-work/<slug>/driver.py`. run it with `uvx --from harald python <script>`.
+   a `DriverCommand` has a `name`, its `params` and a `payload_py`: one python
+   expression over the params, which arrive as strings, giving the plaintext bytes.
+   it may call `rgb_bytes(value)`, which turns a colour name such as pink, or
+   6-digit hex, into three bytes. set `cipher` to `"aes-ecb"` or
+   `"aes-cbc-zero-iv"` with the key in `key_hex`, or leave both `None`. the driver
+   encrypts but never pads, so an encrypted plaintext must be whole 16-byte blocks.
+   set `address_hint` to the address from `scan`; when it is empty the driver scans
+   for `service_uuid`. the protocol lists the service and characteristic uuids, the
+   cipher and each command's payload. the driver has its own small cli, for example
+   `on`, `off` and `brightness 50`, and does not import harald. the human runs it
    with `uv run harald-work/<slug>/driver.py <command>` and tells you what the
    gadget did. if they want to share it, it can become a `devices/<slug>/` entry
-   (`device.toml`, `protocol.md`, `driver.py`) under the keys rule: an app-wide key,
-   or no key at all.
+   (`device.toml`, `protocol.md`, `driver.py`) under the keys rule, so with an
+   app-wide key or no key at all, and with an empty `address_hint`.

@@ -1,0 +1,22 @@
+# $slug protocol
+
+how to control `$name` (vendor: $vendor) over bluetooth le. every command below was
+checked against the real gadget. `driver.py`, beside this file, sends them.
+
+## gatt
+
+- service: `$service_uuid`
+- write characteristic: `$write_char_uuid`
+
+## encryption
+
+$encryption
+
+## commands
+
+each payload is a python expression over the command's values, which arrive as
+strings from the command line. `rgb_bytes(value)` turns a colour name such as
+`pink`, or 6-digit hex such as `ff8800`, into three bytes r, g, b.
+$payload_note
+
+$commands
