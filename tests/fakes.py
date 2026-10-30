@@ -75,13 +75,28 @@ class FakeScanner:
 
     @classmethod
     async def discover(
-        cls, timeout: float = 5.0, *, return_adv: bool = False, **kwargs
+        cls,
+        timeout: float = 5.0,
+        *,
+        return_adv: bool = False,
+        service_uuids: list[str] | None = None,
+        **kwargs,
     ):
+        """Like bleak on macos: a `service_uuids` filter drops every device that does
+        not advertise one of those services."""
         if cls.error is not None:
             raise cls.error
+        adverts = cls.adverts
+        if service_uuids is not None:
+            wanted = {uuid.lower() for uuid in service_uuids}
+            adverts = [
+                (device, adv)
+                for device, adv in adverts
+                if wanted & {uuid.lower() for uuid in adv.service_uuids}
+            ]
         if return_adv:
-            return {device.address: (device, adv) for device, adv in cls.adverts}
-        return [device for device, _ in cls.adverts]
+            return {device.address: (device, adv) for device, adv in adverts}
+        return [device for device, _ in adverts]
 
 
 class FakeClient:

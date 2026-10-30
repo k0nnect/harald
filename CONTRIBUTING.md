@@ -28,8 +28,9 @@ summary = "rgb lamp whose colour writes are encrypted with an app-wide key"
 the playbook leaves your agent's work in `harald-work/<slug>/` (`protocol.md` and
 `driver.py`); copy those over and add `device.toml`. before you open a pull request:
 
-1. set the driver's `address_hint` to `""`, so it scans for the service uuid instead
-   of your own unit's address.
+1. set `ADDRESS_HINT` in `driver.py` to `""`, so it scans instead of using your own
+   unit's address. the scan looks for the service uuid, and for a name starting with
+   `NAME_HINT` when that is set, for gadgets that don't advertise their service.
 2. from your checkout, run `uv run harald drive <slug> <command>` against the real
    gadget, using values the vendor app's capture never contained. replaying captured
    bytes does not count as decoded.

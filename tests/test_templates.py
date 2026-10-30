@@ -13,7 +13,7 @@ from dataclasses import replace
 import pytest
 from bleak.exc import BleakError
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
+from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService, advert
 
 from harald.errors import HaraldError
 from harald.templates import DriverCommand, DriverSpec, render_driver, render_protocol
@@ -211,6 +211,26 @@ def test_driver_reports_when_no_device_advertises_the_service(spec, tmp_path, ca
     assert err.startswith(f"error: no device advertising {SVC} found\n")
     assert err == err.lower()
     assert FakeClient.writes == []
+
+
+def test_driver_finds_a_gadget_that_hides_its_service_by_name(spec, tmp_path, capsys):
+    # many gadgets advertise only a name. macos then drops them from a scan filtered
+    # by service, so a name_hint has to scan unfiltered and match the name.
+    FakeScanner.reset(
+        adverts=[advert("DD-44", "lamp-7f3a", -60), advert("EE-55", None, -40)]
+    )
+    shared = replace(spec, address_hint="", name_hint="lamp-")
+    driver = load_driver(shared, tmp_path)
+    assert driver.main(["off"]) == 0
+    assert capsys.readouterr().out.endswith("sent off to DD-44\n")
+    assert len(FakeClient.writes) == 1
+    FakeScanner.reset(adverts=[advert("EE-55", "other", -40)])
+    assert driver.main(["off"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"error: no device advertising {SVC} or named lamp-* found\n")
+    # without a name_hint the same gadget stays out of reach
+    FakeScanner.reset(adverts=[advert("DD-44", "lamp-7f3a", -60)])
+    assert load_driver(replace(shared, name_hint=""), tmp_path).main(["off"]) == 2
 
 
 def test_driver_failing_disconnect_keeps_the_result_and_the_error(

@@ -101,6 +101,14 @@ def test_human_only_commands_are_left_to_the_human():
         ) in rule, agent
 
 
+def test_driver_step_covers_gadgets_that_hide_their_service():
+    for agent in PLAYBOOK_AGENTS:
+        method = " ".join(_method(agent).split())
+        step = method[method.index("7. write the protocol") :]
+        assert "`service_uuids`" in step, agent
+        assert "set `name_hint`" in step, agent
+
+
 def test_install_writes_expected_filename(tmp_path):
     skill = install_playbook("claude-code", tmp_path)
     assert skill == tmp_path / "SKILL.md"

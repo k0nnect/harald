@@ -126,10 +126,14 @@ follow the steps in order. nothing here is specific to one device.
    `"aes-cbc-zero-iv"` with the key in `key_hex`, or leave both `None`. the driver
    encrypts but never pads, so an encrypted plaintext must be whole 16-byte blocks.
    set `address_hint` to the address from `scan`; when it is empty the driver scans
-   for `service_uuid`. the protocol lists the service and characteristic uuids, the
-   cipher and each command's payload. the driver has its own small cli, for example
-   `on`, `off` and `brightness 50`, and does not import harald. the human runs it
-   with `uv run harald-work/<slug>/driver.py <command>` and tells you what the
-   gadget did. if they want to share it, it can become a `devices/<slug>/` entry
+   for `service_uuid`. compare the gadget's advertised `service_uuids` from `scan`
+   with your `service_uuid`: many gadgets do not advertise their service, and then
+   that scan cannot find them, so set `name_hint` to the start of the name `scan`
+   showed, without any serial number, and the driver also matches by name. the
+   protocol lists the service and characteristic uuids, the cipher and each
+   command's payload. the driver has its own small cli, for example `on`, `off` and
+   `brightness 50`, and does not import harald. the human runs it with
+   `uv run harald-work/<slug>/driver.py <command>` and tells you what the gadget
+   did. if they want to share it, it can become a `devices/<slug>/` entry
    (`device.toml`, `protocol.md`, `driver.py`) under the keys rule, so with an
    app-wide key or no key at all, and with an empty `address_hint`.

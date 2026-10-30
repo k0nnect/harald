@@ -52,7 +52,9 @@ class DriverSpec:
 
     `cipher` is None, "aes-ecb" or "aes-cbc-zero-iv". With a cipher, `key_hex` is the
     aes key and every plaintext must be whole 16-byte blocks, since the driver adds
-    no padding. An empty `address_hint` makes the driver scan for `service_uuid`.
+    no padding. An empty `address_hint` makes the driver scan for a device that
+    advertises `service_uuid` or, when `name_hint` is set, whose local name starts
+    with `name_hint`: many gadgets advertise only their name, not their service.
     """
 
     slug: str
@@ -64,6 +66,7 @@ class DriverSpec:
     cipher: str | None
     key_hex: str | None
     commands: list[DriverCommand]
+    name_hint: str = ""
 
 
 def render_driver(spec: DriverSpec) -> str:
@@ -77,6 +80,7 @@ def render_driver(spec: DriverSpec) -> str:
         device=_literal(spec.name),
         vendor=_literal(spec.vendor),
         address_hint=_literal(spec.address_hint),
+        name_hint=_literal(spec.name_hint),
         service_uuid=_literal(spec.service_uuid),
         write_char_uuid=_literal(spec.write_char_uuid),
         cipher=_literal(spec.cipher),

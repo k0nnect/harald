@@ -93,3 +93,9 @@ def test_contributing_states_keys_rule():
     assert "app-wide" in text
     assert re.search(r"never[^.]*per-unit", text)
     assert re.search(r"never[^.]*pairing key", text)
+
+
+def test_contributing_names_the_driver_constants():
+    text = CONTRIBUTING.read_text(encoding="utf-8")
+    assert "`ADDRESS_HINT`" in text and "`NAME_HINT`" in text
+    assert "address_hint" not in text  # the spec field, not what driver.py holds

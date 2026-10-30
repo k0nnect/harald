@@ -16,7 +16,7 @@ bleak and cryptography from the block above:
 each command builds a plaintext payload, encrypts it when CIPHER is set, and writes
 it to WRITE_CHAR_UUID: without response when the characteristic allows that, with
 response otherwise. with no --address and no ADDRESS_HINT, it scans for a device
-advertising SERVICE_UUID.
+advertising SERVICE_UUID or, when NAME_HINT is set, one whose name starts with it.
 """
 
 from __future__ import annotations
@@ -36,7 +36,10 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 DEVICE = $device
 VENDOR = $vendor
-ADDRESS_HINT = $address_hint  # empty: scan for SERVICE_UUID
+ADDRESS_HINT = $address_hint  # empty: scan for SERVICE_UUID or NAME_HINT
+# set for gadgets that do not advertise SERVICE_UUID: the scan then also takes a
+# device whose name starts with this
+NAME_HINT = $name_hint
 SERVICE_UUID = $service_uuid
 WRITE_CHAR_UUID = $write_char_uuid
 CIPHER = $cipher  # None, "aes-ecb" or "aes-cbc-zero-iv"
@@ -153,19 +156,35 @@ def encrypt(plaintext: bytes) -> bytes:
     return encryptor.update(plaintext) + encryptor.finalize()
 
 
+def wanted_device() -> str:
+    """What the scan looks for, in words."""
+    if NAME_HINT:
+        return f"device advertising {SERVICE_UUID} or named {NAME_HINT}*"
+    return f"device advertising {SERVICE_UUID}"
+
+
+def is_wanted(device, adv) -> bool:
+    """True if the advert has SERVICE_UUID, or a name starting with NAME_HINT."""
+    if SERVICE_UUID in (uuid.lower() for uuid in adv.service_uuids):
+        return True
+    name = adv.local_name or device.name or ""
+    return bool(NAME_HINT) and name.startswith(NAME_HINT)
+
+
 async def find_device():
-    """Scan for SCAN_SECONDS and return the strongest device advertising SERVICE_UUID."""
-    print(f"scanning {SCAN_SECONDS:g} s for a device advertising {SERVICE_UUID}")
+    """Scan for SCAN_SECONDS and return the strongest device that `is_wanted`."""
+    print(f"scanning {SCAN_SECONDS:g} s for a {wanted_device()}")
+    # on macos a service filter hides every device that does not advertise it, so
+    # filter only when there is no name to look for
+    service_filter = {} if NAME_HINT else {"service_uuids": [SERVICE_UUID]}
     found = await BleakScanner.discover(
-        timeout=SCAN_SECONDS, return_adv=True, service_uuids=[SERVICE_UUID]
+        timeout=SCAN_SECONDS, return_adv=True, **service_filter
     )
     matches = [
-        (adv.rssi, device)
-        for device, adv in found.values()
-        if SERVICE_UUID in (uuid.lower() for uuid in adv.service_uuids)
+        (adv.rssi, device) for device, adv in found.values() if is_wanted(device, adv)
     ]
     if not matches:
-        raise DriverError(f"no device advertising {SERVICE_UUID} found", NOT_FOUND_HINT)
+        raise DriverError(f"no {wanted_device()} found", NOT_FOUND_HINT)
     device = max(matches, key=lambda match: match[0])[1]
     if len(matches) > 1:
         print(f"found {len(matches)} devices; using the strongest, {device.address}")
@@ -211,7 +230,7 @@ def add_address(parser: argparse.ArgumentParser, default: str) -> None:
         "--address",
         default=default,
         metavar="address",
-        help=f"the gadget's address; empty scans for a device advertising {SERVICE_UUID}",
+        help=f"the gadget's address; empty scans for a {wanted_device()}",
     )
 
 
