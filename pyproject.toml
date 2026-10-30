@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "harald"
 dynamic = ["version"]
 description = "helps coding agents work out the bluetooth le protocol of gadgets you own"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -15,6 +16,11 @@ dependencies = [
     "mcp>=2.3",
     "cryptography>=44",
 ]
+
+[project.urls]
+homepage = "https://github.com/k0nnect/harald"
+source = "https://github.com/k0nnect/harald"
+issues = "https://github.com/k0nnect/harald/issues"
 
 [project.scripts]
 harald = "harald.cli:main"

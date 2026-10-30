@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="harald ハーラル ᚼᛅᚱᛅᛚᛏᚱ. teach your agent to speak bluetooth." width="100%">
+  <img src="https://raw.githubusercontent.com/k0nnect/harald/main/assets/banner.svg" alt="harald ハーラル ᚼᛅᚱᛅᛚᛏᚱ. teach your agent to speak bluetooth." width="100%">
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <a href="#六-contributing-a-device">add your device</a>
 </p>
 
-![a coding agent works out an led strip's protocol with harald, then turns the strip pink](assets/demo.gif)
+![a coding agent works out an led strip's protocol with harald, then turns the strip pink](https://raw.githubusercontent.com/k0nnect/harald/main/assets/demo.gif)
 
 **fig. 1** · claude + harald take an istrip+ strip from unknown to pink in one session.
 

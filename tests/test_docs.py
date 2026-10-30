@@ -28,6 +28,9 @@ SECTIONS = (
     "六 contributing a device",
 )
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
+# an html <img src="..."> or a markdown ![alt](src)
+IMAGE_SRC = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"|!\[[^\]]*\]\(([^)\s]+)\)')
+RAW_ASSETS = "https://raw.githubusercontent.com/k0nnect/harald/main/assets/"
 
 
 def _prose(path: Path) -> str:
@@ -69,6 +72,15 @@ def test_banner_is_outlined_paths():
     assert "<path" in svg
     assert "<text" not in svg
     assert "<tspan" not in svg
+
+
+def test_readme_images_have_absolute_urls():
+    # pypi renders the readme away from the repo, where a relative src finds nothing
+    srcs = [html or md for html, md in IMAGE_SRC.findall(_prose(README))]
+    assert len(srcs) >= 6
+    assert all(src.startswith("https://") for src in srcs), srcs
+    ours = [src for src in srcs if "assets/" in src]
+    assert ours == [RAW_ASSETS + "banner.svg", RAW_ASSETS + "demo.gif"]
 
 
 def test_readme_claims_tested_on_mac():
