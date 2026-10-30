@@ -1,4 +1,12 @@
 import pytest
+from fakes import FakeClient, FakeScanner
+
+
+@pytest.fixture(autouse=True)
+def fresh_fakes():
+    """Give every test default fake ble backends with no recorded writes."""
+    FakeScanner.reset()
+    FakeClient.reset()
 
 
 @pytest.fixture(autouse=True)
