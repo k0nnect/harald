@@ -47,6 +47,16 @@ def test_capture_open_prints_timeline(tmp_path, capsys):
     assert out.rstrip().endswith("showing 1–2 of 2 events")
 
 
+def test_capture_open_filters_by_connection(tmp_path, capsys):
+    path = write_capture(tmp_path, discovery=True, writes=[b"\x01\x02", b"\x03"])
+    assert cli.main(["capture", "open", str(path), "--conn", "0x0040"]) == 0
+    out = capsys.readouterr().out
+    assert "c=0x0040  phone->device  write_cmd  h=0x0012  ffe1  01 02" in out
+    assert out.rstrip().endswith("showing 1–2 of 2 events with c=0x0040")
+    assert cli.main(["capture", "open", str(path), "--conn", "65"]) == 0
+    assert capsys.readouterr().out == "showing 0 of 0 events with c=0x0041\n"
+
+
 def test_bluetooth_off_exits_2_with_hint(capsys):
     FakeClient.reset(connect_error=BleakError("Bluetooth device is turned off"))
     assert cli.main(["connect", "AA-11"]) == 2

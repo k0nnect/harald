@@ -1,8 +1,9 @@
 """Decode att traffic out of hci acl records: writes, notifications, indications, reads.
 
 acl fragments are reassembled into l2cap frames per connection and direction, and only
-the att channel (cid 0x0004) is kept. The handle-to-uuid map comes from the gatt
-discovery the phone ran against the device, when the capture caught it.
+the att channel (cid 0x0004) is kept. Each connection gets its own handle-to-uuid map,
+from the gatt discovery the phone ran against that device, when the capture caught
+it: a capture can hold several connections, and their handles mean different things.
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ _HANDLE_OPS = {  # opcode, u16 handle, value
     0x1D: "indicate",
     _READ_REQ: "read_req",
 }
+# the ops that address the device's gatt server, by the direction they travel. the
+# rest address the phone's own server, whose handles the map does not describe.
+_TO_DEVICE_SERVER: dict[Direction, frozenset[str]] = {
+    "phone->device": frozenset({"write_req", "write_cmd", "read_req"}),
+    "device->phone": frozenset({"notify", "indicate", "read_rsp"}),
+}
 # read-by-type entry: attribute handle, properties, value handle, 2- or 16-byte uuid.
 _CHAR_DECL_SIZES = (7, 21)
 _FIND_INFO_SIZES = {0x01: 4, 0x02: 18}  # format: handle + 2- or 16-byte uuid
@@ -67,16 +74,22 @@ class AttEvent:
     uuid: str | None
     value: bytes
 
+    def addresses_device(self) -> bool:
+        """True for ops on the device's gatt server, which discovery describes."""
+        return self.op in _TO_DEVICE_SERVER[self.direction]
 
-def decode_att(records: list[HciRecord]) -> tuple[list[AttEvent], dict[int, str]]:
-    """Turn hci records into att events plus the handle-to-uuid map from discovery.
 
-    The map is built from responses the device sent the phone, so it describes the
-    device's gatt server, which is what the phone's writes and the device's
-    notifications address.
+def decode_att(
+    records: list[HciRecord],
+) -> tuple[list[AttEvent], dict[int, dict[int, str]]]:
+    """Turn hci records into att events plus a handle-to-uuid map per connection.
+
+    Each map is built from responses the device sent the phone on that connection, so
+    it describes that device's gatt server. Only events that address that server
+    (`AttEvent.addresses_device`) are labelled with a uuid.
     """
     events: list[AttEvent] = []
-    handle_map: dict[int, str] = {}
+    handle_maps: dict[int, dict[int, str]] = {}  # conn -> handle -> uuid
     last_read: dict[tuple[int, str], int] = {}  # (conn, requesting side) -> handle
     # conn -> whether the phone's last read-by-type request asked for 0x2803
     wants_chars: dict[int, bool] = {}
@@ -86,9 +99,9 @@ def decode_att(records: list[HciRecord]) -> tuple[list[AttEvent], dict[int, str]
             wants_chars[conn] = _uuid(pdu[5:]) == _CHAR_DECL_TYPE
         elif op == _READ_BY_TYPE_RSP and kind == "acl_in":
             if wants_chars.get(conn, True):  # no request seen: go by shape alone
-                _map_char_decls(pdu, handle_map)
+                _map_char_decls(pdu, handle_maps.setdefault(conn, {}))
         elif op == _FIND_INFO_RSP and kind == "acl_in":
-            _map_find_info(pdu, handle_map)
+            _map_find_info(pdu, handle_maps.setdefault(conn, {}))
         elif op in _HANDLE_OPS and len(pdu) >= 3:
             handle = int.from_bytes(pdu[1:3], "little")
             if op == _READ_REQ:
@@ -103,22 +116,24 @@ def decode_att(records: list[HciRecord]) -> tuple[list[AttEvent], dict[int, str]
             events.append(
                 AttEvent(0, ts, _DIRECTION[kind], "read_rsp", conn, handle, None, value)
             )
+    handle_maps = {conn: found for conn, found in handle_maps.items() if found}
     # numbered and labelled last, so discovery seen after an event still names it.
     for index, event in enumerate(events, 1):
         event.index = index
-        if event.handle is not None:
-            event.uuid = handle_map.get(event.handle)
-    return events, handle_map
+        if event.handle is not None and event.addresses_device():
+            event.uuid = handle_maps.get(event.conn, {}).get(event.handle)
+    return events, handle_maps
 
 
 def _att_pdus(records: list[HciRecord]) -> Iterator[tuple[float, str, int, bytes]]:
-    """Yield (ts, kind, conn, pdu) for each complete att pdu, stamped at its first fragment.
+    """Yield (ts, kind, conn, pdu) for each complete att pdu, stamped at its last fragment.
 
+    The last fragment is when the pdu was complete, so events keep their time order.
     Fragments are joined per (conn, direction). A record shorter than its acl header
     claims (a snaplen cut) is skipped and drops that stream's partial frame, so later
     fragments can't be glued onto the wrong bytes.
     """
-    partial: dict[tuple[int, str], tuple[float, bytearray]] = {}
+    partial: dict[tuple[int, str], bytearray] = {}
     for record in records:
         if record.kind not in _DIRECTION or len(record.data) < _HEADER.size:
             continue
@@ -132,10 +147,10 @@ def _att_pdus(records: list[HciRecord]) -> Iterator[tuple[float, str, int, bytes
         if (flags_handle >> 12) & 0b11 == _PB_CONTINUATION:
             if key not in partial:
                 continue  # the frame's start was not captured
-            partial[key][1].extend(body)
+            partial[key].extend(body)
         else:
-            partial[key] = (record.ts, bytearray(body))
-        ts, frame = partial[key]
+            partial[key] = bytearray(body)
+        frame = partial[key]
         if len(frame) < _HEADER.size:
             continue
         size, cid = _HEADER.unpack_from(frame)
@@ -144,7 +159,7 @@ def _att_pdus(records: list[HciRecord]) -> Iterator[tuple[float, str, int, bytes
         del partial[key]
         pdu = bytes(frame[_HEADER.size : _HEADER.size + size])
         if cid == _ATT_CID and pdu:
-            yield ts, record.kind, conn, pdu
+            yield record.ts, record.kind, conn, pdu
 
 
 def _uuid(raw: bytes) -> str | None:

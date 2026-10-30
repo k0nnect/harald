@@ -66,12 +66,15 @@ follow the steps in order. nothing here is specific to one device.
 3. open the capture and find the writes.
    call `open_capture` with the path; the human can run `harald capture open <path>`
    to see the same timeline. look for `phone->device` writes (`write_req` or
-   `write_cmd`) at the moment of each action, usually all on one handle. narrow with
-   `handle` and page with `limit` and `offset`. match each write to the agreed
-   action list by order and timing, and note its characteristic uuid.
-   `device->phone` notifications show the gadget's replies and state. if the
-   timeline warns that there was no gatt discovery, handles are shown raw: ask the
-   human to toggle the phone's bluetooth off and on, open the app, and capture again.
+   `write_cmd`) at the moment of each action, usually all on one handle. a capture
+   can also hold the phone's other connections, such as a watch; each line shows
+   its connection as `c=0x...`, and handles only mean something within one
+   connection. narrow with `conn` and `handle`, and page with `limit` and `offset`.
+   match each write to the agreed action list by order and timing, and note its
+   characteristic uuid. `device->phone` notifications show the gadget's replies and
+   state. if the timeline warns that the gadget's connection had no gatt discovery,
+   its handles are shown raw: ask the human to toggle the phone's bluetooth off and
+   on, open the app, and capture again.
 
 4. compare payloads and name their parts.
    group the writes by control and call `diff` on each group, for example every

@@ -4,6 +4,7 @@ import zipfile
 
 import pytest
 from bleak.exc import BleakError
+from capture_helpers import write_capture
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
@@ -99,6 +100,16 @@ async def test_scan_tool_sorted():
     assert [d["address"] for d in devices] == ["BB-22", "AA-11", "CC-33"]
     assert [d["rssi"] for d in devices] == [-40, -70, -90]
     assert devices[1]["manufacturer_data"] == {"0x004c": "0215"}
+
+
+async def test_open_capture_filters_by_connection(tmp_path):
+    path = write_capture(tmp_path, discovery=True, writes=[b"\x01", b"\x02"])
+    server = build_server()
+    out = await call(server, "open_capture", path=str(path), conn=0x0040)
+    assert "c=0x0040  phone->device  write_cmd  h=0x0012  ffe1  01" in out
+    assert out.endswith("showing 1–2 of 2 events with c=0x0040")
+    other = await call(server, "open_capture", path=str(path), conn=0x0041)
+    assert other == "showing 0 of 0 events with c=0x0041"
 
 
 async def test_missing_capture_returns_error(tmp_path):

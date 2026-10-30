@@ -6,9 +6,11 @@ from capture_helpers import (
     FFE1_HANDLE,
     PKLG_ACL_IN,
     PKLG_ACL_OUT,
+    T0,
     WRITE_CMD,
     acl,
     att,
+    char_decls,
     l2cap,
     make_pklg,
     read_by_type_req,
@@ -18,6 +20,9 @@ from capture_helpers import (
 from harald.capture.timeline import build_timeline, render
 
 NOTIFY, READ_REQ, READ_RSP, FIND_INFO_RSP = 0x1B, 0x0A, 0x0B, 0x05
+WRITE_REQ, INDICATE = 0x12, 0x1D
+OTHER_CONN = 0x0041  # a second acl connection, e.g. the phone's watch
+FFE1 = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
 
 def _capture(tmp_path, records, name="records.pklg"):
@@ -26,12 +31,20 @@ def _capture(tmp_path, records, name="records.pklg"):
     return path
 
 
-def _out(pdu: bytes, cid: int = 0x0004):
-    return (PKLG_ACL_OUT, acl(CONN, l2cap(pdu, cid)))
+def _out(pdu: bytes, cid: int = 0x0004, conn: int = CONN):
+    return (PKLG_ACL_OUT, acl(conn, l2cap(pdu, cid)))
 
 
-def _in(pdu: bytes):
-    return (PKLG_ACL_IN, acl(CONN, l2cap(pdu)))
+def _in(pdu: bytes, conn: int = CONN):
+    return (PKLG_ACL_IN, acl(conn, l2cap(pdu)))
+
+
+def _discovery(conn: int = CONN):
+    """The phone discovers the device's characteristics: 0x0012 is ffe1."""
+    return [
+        _out(read_by_type_req(0x2803), conn=conn),
+        _in(char_decls((FFE1_HANDLE, 0xFFE1)), conn=conn),
+    ]
 
 
 def test_write_cmd_with_discovery_maps_uuid(tmp_path):
@@ -48,6 +61,85 @@ def test_write_cmd_with_discovery_maps_uuid(tmp_path):
 def test_missing_discovery_warns(tmp_path):
     tl = build_timeline(write_capture(tmp_path, discovery=False, writes=[b"\x01"]))
     assert tl.events[0].uuid is None and "toggle bluetooth off and on" in tl.warnings[0]
+    assert "c=0x0040" in tl.warnings[0]
+
+
+def test_two_connections_keep_their_own_handle_maps(tmp_path):
+    records = _discovery(CONN) + [
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x01")),
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x02"), conn=OTHER_CONN),
+    ]
+    tl = build_timeline(_capture(tmp_path, records))
+    assert tl.handle_maps == {CONN: {FFE1_HANDLE: FFE1}}
+    assert [(e.conn, e.uuid) for e in tl.events] == [(CONN, FFE1), (OTHER_CONN, None)]
+    # only the connection without discovery is warned about, by name
+    [warning] = tl.warnings
+    assert "c=0x0041" in warning and "0x0040" not in warning
+    out = render(tl)
+    assert "#1  +0.000s  c=0x0040  phone->device  write_cmd  h=0x0012  ffe1  01" in out
+    assert "#2  +0.250s  c=0x0041  phone->device  write_cmd  h=0x0012  -  02" in out
+
+
+def test_render_filters_by_connection(tmp_path):
+    records = _discovery(CONN) + [
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x01")),
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x02"), conn=OTHER_CONN),
+        _out(att(WRITE_CMD, 0x0020, b"\x03")),
+    ]
+    tl = build_timeline(_capture(tmp_path, records))
+    lines = render(tl, conn=OTHER_CONN).splitlines()[len(tl.warnings) :]
+    assert [line.split("  ")[0] for line in lines[:-1]] == ["#2"]
+    assert lines[-1] == "showing 1–1 of 1 events with c=0x0041"
+    both = render(tl, conn=CONN, handle=FFE1_HANDLE).splitlines()
+    assert [line.split("  ")[0] for line in both[len(tl.warnings) : -1]] == ["#1"]
+    assert both[-1] == "showing 1–1 of 1 events with c=0x0040 and h=0x0012"
+
+
+def test_uuids_only_label_ops_addressed_to_the_device(tmp_path):
+    # with discovery, 0x0012 is ffe1 on the device's server. the device may also be a
+    # client of the phone's own server, whose handle 0x0012 is something else.
+    to_device = [
+        _out(att(WRITE_REQ, FFE1_HANDLE, b"\x01")),
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x02")),
+        _out(att(READ_REQ, FFE1_HANDLE)),
+        _in(bytes([READ_RSP, 0x03])),
+        _in(att(NOTIFY, FFE1_HANDLE, b"\x04")),
+        _in(att(INDICATE, FFE1_HANDLE, b"\x05")),
+    ]
+    to_phone = [
+        _in(att(WRITE_REQ, FFE1_HANDLE, b"\x06")),
+        _in(att(WRITE_CMD, FFE1_HANDLE, b"\x07")),
+        _in(att(READ_REQ, FFE1_HANDLE)),
+        _out(bytes([READ_RSP, 0x08])),
+        _out(att(NOTIFY, FFE1_HANDLE, b"\x09")),
+        _out(att(INDICATE, FFE1_HANDLE, b"\x0a")),
+    ]
+    tl = build_timeline(_capture(tmp_path, _discovery() + to_device + to_phone))
+    labelled = [(e.direction, e.op) for e in tl.events if e.uuid == FFE1]
+    assert labelled == [
+        ("phone->device", "write_req"),
+        ("phone->device", "write_cmd"),
+        ("phone->device", "read_req"),
+        ("device->phone", "read_rsp"),
+        ("device->phone", "notify"),
+        ("device->phone", "indicate"),
+    ]
+    assert all(e.uuid is None for e in tl.events[6:])
+    assert all(e.handle == FFE1_HANDLE for e in tl.events)
+
+
+def test_reassembled_frame_takes_the_time_of_its_last_fragment(tmp_path):
+    frame = l2cap(att(WRITE_CMD, FFE1_HANDLE, bytes(37)))
+    records = [
+        (PKLG_ACL_OUT, acl(CONN, frame[:27])),  # at T0
+        _in(att(NOTIFY, 0x0015, b"\x01")),  # at T0 + 0.25
+        (PKLG_ACL_OUT, acl(CONN, frame[27:], pb=0b01)),  # at T0 + 0.5
+    ]
+    tl = build_timeline(_capture(tmp_path, records))
+    assert [(e.op, e.ts) for e in tl.events] == [
+        ("notify", T0 + 0.25),
+        ("write_cmd", T0 + 0.5),
+    ]
 
 
 def test_fragmented_acl_is_reassembled(tmp_path):
@@ -131,9 +223,11 @@ def test_find_info_maps_16_and_128_bit_uuids(tmp_path):
         _out(att(WRITE_CMD, 0x0020, b"\xaa")),
     ]
     tl = build_timeline(_capture(tmp_path, records))
-    assert tl.handle_map == {
-        0x0013: "00002902-0000-1000-8000-00805f9b34fb",
-        0x0020: "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+    assert tl.handle_maps == {
+        CONN: {
+            0x0013: "00002902-0000-1000-8000-00805f9b34fb",
+            0x0020: "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+        }
     }
     out = render(tl)
     assert "h=0x0013  2902  01 00" in out
@@ -147,7 +241,7 @@ def test_read_by_type_for_other_types_does_not_map(tmp_path):
     records = [_out(read_by_type_req(0x2A00)), _in(name_rsp)]
     records += [_out(att(WRITE_CMD, FFE1_HANDLE, b"\x01"))]
     tl = build_timeline(_capture(tmp_path, records))
-    assert tl.handle_map == {}
+    assert tl.handle_maps == {}
     assert "toggle bluetooth off and on" in tl.warnings[0]
 
 

@@ -159,7 +159,15 @@ def _write(args: argparse.Namespace) -> int:
 def _capture_open(args: argparse.Namespace) -> int:
     timeline = build_timeline(Path(args.path))
     # render puts the timeline's warnings first; they are not printed again here.
-    print(render(timeline, limit=args.limit, offset=args.offset, handle=args.handle))
+    print(
+        render(
+            timeline,
+            limit=args.limit,
+            offset=args.offset,
+            handle=args.handle,
+            conn=args.conn,
+        )
+    )
     return 0
 
 
@@ -272,7 +280,7 @@ def _positive_int(text: str) -> int:
     return value
 
 
-def _handle(text: str) -> int:
+def _number(text: str) -> int:
     try:
         return int(text, 0)
     except ValueError:
@@ -374,9 +382,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     opened.add_argument(
         "--handle",
-        type=_handle,
+        type=_number,
         metavar="h",
         help="only events on this att handle, e.g. 0x0012",
+    )
+    opened.add_argument(
+        "--conn",
+        type=_number,
+        metavar="c",
+        help="only events on this acl connection, e.g. 0x0040",
     )
 
     apk = command("apk", _apk, "statically analyze a vendor android app on disk")

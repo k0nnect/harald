@@ -10,15 +10,15 @@ from harald.capture.att import SIG_BASE_SUFFIX, AttEvent, decode_att
 from harald.capture.files import read_capture
 
 NO_DISCOVERY_WARNING = (
-    "no gatt discovery in this capture: handles are shown raw. toggle bluetooth off "
-    "and on on the phone, then open the app, and capture again"
+    "no gatt discovery on connection c=0x{conn:04x}: its handles are shown raw. "
+    "toggle bluetooth off and on on the phone, then open the app, and capture again"
 )
 
 
 @dataclass
 class Timeline:
     events: list[AttEvent]
-    handle_map: dict[int, str]
+    handle_maps: dict[int, dict[int, str]]  # acl connection -> att handle -> uuid
     warnings: list[str]
 
 
@@ -30,30 +30,44 @@ def build_timeline(path: Path) -> Timeline:
 
 @lru_cache(maxsize=8)
 def _build(path: Path, mtime_ns: int) -> Timeline:  # mtime_ns is only the cache key
-    events, handle_map = decode_att(read_capture(path))
-    warnings = []
-    if not handle_map and any(e.handle is not None for e in events):
-        warnings.append(NO_DISCOVERY_WARNING)
-    return Timeline(events, handle_map, warnings)
+    events, handle_maps = decode_att(read_capture(path))
+    # one warning per connection whose writes and notifications have no uuids
+    unmapped = dict.fromkeys(
+        e.conn
+        for e in events
+        if e.handle is not None and e.addresses_device() and e.conn not in handle_maps
+    )
+    warnings = [NO_DISCOVERY_WARNING.format(conn=conn) for conn in unmapped]
+    return Timeline(events, handle_maps, warnings)
 
 
 def render(
-    tl: Timeline, *, limit: int = 200, offset: int = 0, handle: int | None = None
+    tl: Timeline,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    handle: int | None = None,
+    conn: int | None = None,
 ) -> str:
     """Warnings, then one line per event in the window, then a `showing a–b of n` footer.
 
-    `handle` keeps only events on that handle; the footer then counts those.
+    `handle` keeps only events on that att handle and `conn` only events on that acl
+    connection; the footer then counts those.
     """
-    events = (
-        tl.events if handle is None else [e for e in tl.events if e.handle == handle]
-    )
+    events = [
+        e
+        for e in tl.events
+        if (handle is None or e.handle == handle) and (conn is None or e.conn == conn)
+    ]
     offset, limit = max(offset, 0), max(limit, 0)
     shown = events[offset : offset + limit]
     start = tl.events[0].ts if tl.events else 0.0
     lines = [f"warning: {w}" for w in tl.warnings]
     lines += [_line(e, start) for e in shown]
     span = f"{offset + 1}–{offset + len(shown)}" if shown else "0"
-    scope = "" if handle is None else f" with h=0x{handle:04x}"
+    filters = [] if conn is None else [f"c=0x{conn:04x}"]
+    filters += [] if handle is None else [f"h=0x{handle:04x}"]
+    scope = f" with {' and '.join(filters)}" if filters else ""
     lines.append(f"showing {span} of {len(events)} events{scope}")
     return "\n".join(lines)
 
@@ -63,6 +77,7 @@ def _line(e: AttEvent, start: float) -> str:
     fields = [
         f"#{e.index}",
         f"+{e.ts - start:.3f}s",
+        f"c=0x{e.conn:04x}",
         e.direction,
         e.op,
         f"h={handle}",

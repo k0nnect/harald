@@ -187,18 +187,24 @@ def build_server(
 
     @tool
     def open_capture(
-        path: str, limit: int = 200, offset: int = 0, handle: int | None = None
+        path: str,
+        limit: int = 200,
+        offset: int = 0,
+        handle: int | None = None,
+        conn: int | None = None,
     ) -> str | Failure:
         """show the att timeline of a phone capture (packetlogger .pklg or btsnoop log).
 
-        one line per att event with time, direction, op, handle, uuid and value hex;
-        any warnings come first and a `showing a–b of n events` footer comes last.
+        one line per att event with time, acl connection, direction, op, handle, uuid
+        and value hex; any warnings come first and a `showing a–b of n events` footer
+        comes last. a capture can hold several connections, each with its own handles.
         page with limit and offset. handle (an integer, e.g. 18 for h=0x0012) keeps
-        only events on that handle, and offset then counts those filtered events.
-        relative paths resolve against the server's working directory.
+        only events on that handle, conn (e.g. 64 for c=0x0040) only events on that
+        connection, and offset then counts those filtered events. relative paths
+        resolve against the server's working directory.
         """
         timeline = build_timeline(Path(path))
-        return render(timeline, limit=limit, offset=offset, handle=handle)
+        return render(timeline, limit=limit, offset=offset, handle=handle, conn=conn)
 
     @tool
     def diff(payloads_hex: list[str]) -> Record | Failure:
