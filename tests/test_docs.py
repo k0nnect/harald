@@ -34,6 +34,9 @@ FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 # an html <img src="..."> or a markdown ![alt](src)
 IMAGE_SRC = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"|!\[[^\]]*\]\(([^)\s]+)\)')
 RAW_ASSETS = "https://raw.githubusercontent.com/k0nnect/harald/main/assets/"
+# an html <a href="..."> or a markdown [text](target) that is not an image
+LINK = re.compile(r'<a\b[^>]*\bhref="([^"]+)"|(?<!!)\[[^\]]*\]\(([^)\s]+)\)')
+REPO_URL = "https://github.com/k0nnect/harald/"
 
 
 def _prose(path: Path) -> str:
@@ -84,6 +87,15 @@ def test_readme_images_have_absolute_urls():
     assert all(src.startswith("https://") for src in srcs), srcs
     ours = [src for src in srcs if "assets/" in src]
     assert ours == [RAW_ASSETS + "banner.svg", RAW_ASSETS + "demo.gif"]
+
+
+def test_readme_links_work_off_github():
+    # pypi renders the readme away from the repo, where a relative link finds nothing
+    targets = [html or md for html, md in LINK.findall(_prose(README))]
+    assert [t for t in targets if not t.startswith(("https://", "#"))] == []
+    assert REPO_URL + "blob/main/LICENSE" in targets
+    assert REPO_URL + "tree/main/devices" in targets
+    assert REPO_URL + "blob/main/CONTRIBUTING.md" in targets
 
 
 def test_readme_claims_tested_on_mac():

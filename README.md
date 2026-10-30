@@ -6,7 +6,7 @@
   <a href="https://pypi.org/project/harald/"><img alt="pypi" src="https://img.shields.io/pypi/v/harald?style=flat&label=pypi&labelColor=2b2b2b&color=c8102e"></a>
   <a href="#四-agent-setup"><img alt="works with: claude code · codex · cursor" src="https://img.shields.io/badge/works%20with-claude%20code%20%C2%B7%20codex%20%C2%B7%20cursor-2b4bd8?style=flat&labelColor=2b2b2b"></a>
   <a href="#三-devices"><img alt="devices: 0 decoded" src="https://img.shields.io/badge/devices-0%20decoded-4a4640?style=flat&labelColor=2b2b2b"></a>
-  <a href="LICENSE"><img alt="license: mit" src="https://img.shields.io/badge/license-mit-4a4640?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://github.com/k0nnect/harald/blob/main/LICENSE"><img alt="license: mit" src="https://img.shields.io/badge/license-mit-4a4640?style=flat&labelColor=2b2b2b"></a>
 </p>
 
 <p align="center">
@@ -73,9 +73,10 @@ harald drive <slug> <command>        run a library device's driver
 | istrip+ led strip | being worked out on real hardware | in progress |
 | your device | open a pull request with its `device.toml`, `protocol.md` and `driver.py` | wanted |
 
-each decoded device lives in [`devices/`](devices/) with its protocol written up and a
-standalone driver. `harald devices` lists them, and `harald drive <slug> <command>`
-runs one, for example `harald drive <slug> on`.
+each decoded device lives in
+[`devices/`](https://github.com/k0nnect/harald/tree/main/devices) with its protocol
+written up and a standalone driver. `harald devices` lists them, and
+`harald drive <slug> <command>` runs one, for example `harald drive <slug> on`.
 
 ## 四 agent setup
 
@@ -188,8 +189,9 @@ else's devices.
 
 cracked a gadget? your agent's work is in `harald-work/<slug>/`. turn it into
 `devices/<slug>/` with a `device.toml`, `protocol.md` and `driver.py`, then open a pull
-request. the [contributing guide](CONTRIBUTING.md) has the details, including the keys
-rule.
+request. the
+[contributing guide](https://github.com/k0nnect/harald/blob/main/CONTRIBUTING.md)
+has the details, including the keys rule.
 
 <sub>mit license. harald is named after king harald "bluetooth" of denmark, after whom
 bluetooth is named; ᚼᛅᚱᛅᛚᛏᚱ is his name as it is carved on the jelling stone.</sub>
