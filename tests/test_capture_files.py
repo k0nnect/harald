@@ -1,7 +1,9 @@
+import struct
+
 import pytest
 from capture_helpers import T0, make_btsnoop, make_pklg
 
-from harald.capture.files import read_capture
+from harald.capture.files import read_capture, read_capture_with_warnings
 from harald.errors import CaptureFormatError
 
 CMD = bytes.fromhex("030c00")  # hci reset
@@ -80,3 +82,66 @@ def test_garbage_file_raises_capture_error(tmp_path):
     with pytest.raises(CaptureFormatError) as e:
         _read(tmp_path, b"this is not a bluetooth capture at all", "notes.txt")
     assert e.value.hint == "expected a packetlogger .pklg or btsnoop file"
+
+
+def _read_warned(tmp_path, raw: bytes, name: str = "capture.pklg"):
+    path = tmp_path / name
+    path.write_bytes(raw)
+    return read_capture_with_warnings(path)
+
+
+def _assert_cut_short_warning(warnings: list[str], offset: int) -> None:
+    expected = (
+        f"the capture is cut short: the record at byte {offset} runs past the end "
+        "of the file, so it was skipped"
+    )
+    assert warnings == [expected]
+
+
+# the last pklg record (acl_in) starts at byte 40 and is 23 bytes long: 1 cuts its
+# payload, 19 leaves only its length field, 20 cuts into the length field itself.
+@pytest.mark.parametrize("byte_order", ["big", "little"])
+@pytest.mark.parametrize("cut", [1, 19, 20])
+def test_pklg_cut_short_last_record_keeps_the_ones_before(tmp_path, byte_order, cut):
+    raw = make_pklg(PKLG_RECORDS, byte_order=byte_order)[:-cut]
+    records, warnings = _read_warned(tmp_path, raw)
+    assert [(r.kind, r.data) for r in records] == [("cmd", CMD), ("acl_out", ACL_OUT)]
+    _assert_cut_short_warning(warnings, 40)
+    assert read_capture(tmp_path / "capture.pklg") == records  # same signature
+
+
+def test_pklg_whole_file_has_no_warnings(tmp_path):
+    records, warnings = _read_warned(tmp_path, make_pklg(PKLG_RECORDS))
+    _assert_pklg_records(records)
+    assert warnings == []
+
+
+def test_pklg_damage_in_the_middle_still_raises(tmp_path):
+    raw = bytearray(make_pklg(PKLG_RECORDS))
+    raw[16:20] = struct.pack(">I", 3)  # the second record's len, below the minimum
+    with pytest.raises(CaptureFormatError):
+        _read(tmp_path, bytes(raw))
+    with pytest.raises(CaptureFormatError):  # no whole record before the cut
+        _read(tmp_path, make_pklg(PKLG_RECORDS[:1])[:-1])
+
+
+# the last btsnoop record (acl_in) starts at byte 111: a 24-byte header, then 11
+# bytes. 1 cuts its payload, 11 leaves only its header, 20 cuts into the header.
+@pytest.mark.parametrize("cut", [1, 11, 20])
+def test_btsnoop_cut_short_last_record_keeps_the_ones_before(tmp_path, cut):
+    raw = make_btsnoop(BTSNOOP_RECORDS)[:-cut]
+    records, warnings = _read_warned(tmp_path, raw, "btsnoop_hci.log")
+    assert [(r.kind, r.data) for r in records] == BTSNOOP_RECORDS[:3]
+    _assert_cut_short_warning(warnings, 111)
+    assert read_capture(tmp_path / "btsnoop_hci.log") == records  # same signature
+
+
+def test_btsnoop_damage_in_the_middle_still_raises(tmp_path):
+    raw = bytearray(make_btsnoop(BTSNOOP_RECORDS))
+    # empty the second record (at byte 44): incl_len 0, and drop its 7 payload bytes
+    raw[48:52] = struct.pack(">I", 0)
+    del raw[68:75]
+    with pytest.raises(CaptureFormatError, match="offset 44 is empty"):
+        _read(tmp_path, bytes(raw), "btsnoop_hci.log")
+    with pytest.raises(CaptureFormatError, match="cut short"):  # no whole record
+        _read(tmp_path, make_btsnoop(BTSNOOP_RECORDS[:1])[:-1], "btsnoop_hci.log")

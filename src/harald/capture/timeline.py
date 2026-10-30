@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from harald.capture.att import SIG_BASE_SUFFIX, AttEvent, decode_att
-from harald.capture.files import read_capture
+from harald.capture.files import read_capture_with_warnings
 
 NO_DISCOVERY_WARNING = (
     "no gatt discovery on connection c=0x{conn:04x}: its handles are shown raw. "
@@ -30,14 +30,15 @@ def build_timeline(path: Path) -> Timeline:
 
 @lru_cache(maxsize=8)
 def _build(path: Path, mtime_ns: int) -> Timeline:  # mtime_ns is only the cache key
-    events, handle_maps = decode_att(read_capture(path))
+    records, warnings = read_capture_with_warnings(path)
+    events, handle_maps = decode_att(records)
     # one warning per connection whose writes and notifications have no uuids
     unmapped = dict.fromkeys(
         e.conn
         for e in events
         if e.handle is not None and e.addresses_device() and e.conn not in handle_maps
     )
-    warnings = [NO_DISCOVERY_WARNING.format(conn=conn) for conn in unmapped]
+    warnings += [NO_DISCOVERY_WARNING.format(conn=conn) for conn in unmapped]
     return Timeline(events, handle_maps, warnings)
 
 

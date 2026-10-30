@@ -261,6 +261,17 @@ def test_non_att_and_cut_short_acl_records_are_skipped(tmp_path):
     assert [(e.op, e.value) for e in tl.events] == [("write_cmd", b"\x07")]
 
 
+def test_cut_short_capture_keeps_earlier_events_and_warns(tmp_path):
+    path = write_capture(tmp_path, discovery=True, writes=[b"\x01", b"\x02"])
+    path.write_bytes(path.read_bytes()[:-2])  # copied while still recording
+    tl = build_timeline(path)
+    assert [e.value for e in tl.events] == [b"\x01"]
+    [warning] = tl.warnings
+    assert warning.startswith("the capture is cut short: ")
+    assert warning == warning.lower()
+    assert render(tl).startswith(f"warning: {warning}\n#1  ")
+
+
 def test_build_timeline_is_cached_by_path_and_mtime(tmp_path):
     path = write_capture(tmp_path, discovery=True, writes=[b"\x01"])
     first = build_timeline(path)

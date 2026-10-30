@@ -17,6 +17,10 @@ from harald.errors import CaptureFormatError
 HciKind = Literal["cmd", "evt", "acl_out", "acl_in"]
 
 HINT = "expected a packetlogger .pklg or btsnoop file"
+CUT_SHORT_WARNING = (
+    "the capture is cut short: the record at byte {offset} runs past the end of the "
+    "file, so it was skipped"
+)
 
 # packetlogger (wireshark wiretap/packetlogger.c): u32 len, u32 ts_secs, u32 ts_usecs,
 # then len - 8 bytes whose first byte is the type. len counts the timestamp too.
@@ -53,52 +57,73 @@ class HciRecord:
 
 
 def read_capture(path: Path) -> list[HciRecord]:
-    """Parse a packetlogger or btsnoop file into hci records, in file order."""
+    """Parse a packetlogger or btsnoop file into hci records, in file order.
+
+    A cut-short last record is dropped; `read_capture_with_warnings` also says so.
+    """
+    return read_capture_with_warnings(path)[0]
+
+
+def read_capture_with_warnings(path: Path) -> tuple[list[HciRecord], list[str]]:
+    """`read_capture`, plus lowercase warnings about the file.
+
+    A capture copied while it was still recording can end partway through its last
+    record. The records before it are kept, as long as at least one is whole, and a
+    warning names where the cut record starts. Damage anywhere else still raises.
+    """
     raw = Path(path).read_bytes()
     if raw.startswith(BTSNOOP_MAGIC):
-        return _read_btsnoop(raw)
-    return _read_pklg(raw)
+        records, cut_at = _read_btsnoop(raw)
+    else:
+        records, cut_at = _read_pklg(raw)
+    warnings = [] if cut_at is None else [CUT_SHORT_WARNING.format(offset=cut_at)]
+    return records, warnings
 
 
 def _error(message: str) -> CaptureFormatError:
     return CaptureFormatError(message, hint=HINT)
 
 
-def _walks(raw: bytes, order: str) -> bool:
-    """True if `raw` is a non-empty chain of pklg records in this byte order to eof."""
-    offset = 0
-    while offset < len(raw):
-        if len(raw) - offset < 4:
-            return False
-        (length,) = struct.unpack_from(order + "I", raw, offset)
-        if length < _PKLG_MIN_LEN or length > len(raw) - offset - 4:
-            return False
-        offset += 4 + length
-    return offset > 0
+def _walk(raw: bytes, order: str) -> int:
+    """How many bytes whole pklg records in this byte order cover from the start.
 
-
-def _pklg_byte_order(raw: bytes) -> str:
-    """The order whose record chain walks the whole file; big-endian if both do.
-
-    Wireshark's tiebreak: a big-endian first len with zero low 16 bits and non-zero
-    high 16 bits is really a small little-endian len, so little-endian wins then.
+    The chain must reach eof, except that its last record may run past it. 0 means
+    the chain breaks (a len below the minimum) or not one record is whole.
     """
-    big, little = _walks(raw, ">"), _walks(raw, "<")
-    if big and little:
+    offset = 0
+    while len(raw) - offset >= 4:
+        (length,) = struct.unpack_from(order + "I", raw, offset)
+        if length < _PKLG_MIN_LEN:
+            return 0
+        if length > len(raw) - offset - 4:
+            break  # the last record is cut short
+        offset += 4 + length
+    return offset
+
+
+def _pklg_byte_order(raw: bytes) -> tuple[str, int]:
+    """The order whose record chain covers more of the file, and where it ends.
+
+    A chain that reaches eof covers the most. If both orders cover the same bytes,
+    wireshark's tiebreak applies: a big-endian first len with zero low 16 bits and
+    non-zero high 16 bits is really a small little-endian len, so little-endian wins.
+    """
+    big, little = _walk(raw, ">"), _walk(raw, "<")
+    if not big and not little:
+        raise _error("not a packetlogger or btsnoop capture")
+    if big == little:
         (length,) = struct.unpack_from(">I", raw)
-        return "<" if length & 0xFFFF == 0 and length >> 16 else ">"
-    if big:
-        return ">"
-    if little:
-        return "<"
-    raise _error("not a packetlogger or btsnoop capture")
+        return ("<" if length & 0xFFFF == 0 and length >> 16 else ">"), big
+    return (">", big) if big > little else ("<", little)
 
 
-def _read_pklg(raw: bytes) -> list[HciRecord]:
-    header = struct.Struct(_pklg_byte_order(raw) + "III")
+def _read_pklg(raw: bytes) -> tuple[list[HciRecord], int | None]:
+    """The records, and the offset of a cut-short last record (None if there is none)."""
+    order, whole = _pklg_byte_order(raw)
+    header = struct.Struct(order + "III")
     records: list[HciRecord] = []
     offset = 0
-    while offset < len(raw):  # _pklg_byte_order already checked every len
+    while offset < whole:  # _pklg_byte_order already checked every len
         length, secs, usecs = header.unpack_from(raw, offset)
         end = offset + 4 + length
         kind = _PKLG_KINDS.get(raw[offset + header.size])
@@ -106,10 +131,11 @@ def _read_pklg(raw: bytes) -> list[HciRecord]:
             data = raw[offset + header.size + 1 : end]
             records.append(HciRecord(secs + usecs / 1_000_000, kind, data))
         offset = end
-    return records
+    return records, (whole if whole < len(raw) else None)
 
 
-def _read_btsnoop(raw: bytes) -> list[HciRecord]:
+def _read_btsnoop(raw: bytes) -> tuple[list[HciRecord], int | None]:
+    """The records, and the offset of a cut-short last record (None if there is none)."""
     if len(raw) < _BTSNOOP_HEADER.size:
         raise _error("btsnoop header is cut short")
     _, version, datalink = _BTSNOOP_HEADER.unpack_from(raw)
@@ -120,13 +146,13 @@ def _read_btsnoop(raw: bytes) -> list[HciRecord]:
     records: list[HciRecord] = []
     offset = _BTSNOOP_HEADER.size
     while offset < len(raw):
-        if len(raw) - offset < _BTSNOOP_RECORD.size:
-            raise _error(f"btsnoop record at offset {offset} is cut short")
+        if not _btsnoop_record_fits(raw, offset):  # the last record is cut short
+            if offset == _BTSNOOP_HEADER.size:  # and not one whole record came first
+                raise _error(f"btsnoop record at offset {offset} is cut short")
+            return records, offset
         _, incl_len, flags, _, ts_us = _BTSNOOP_RECORD.unpack_from(raw, offset)
         start = offset + _BTSNOOP_RECORD.size
         end = start + incl_len
-        if end > len(raw):
-            raise _error(f"btsnoop record at offset {offset} is cut short")
         payload = raw[start:end]
         received = bool(flags & _FLAG_RECEIVED)
         if datalink == _DATALINK_H4:
@@ -141,7 +167,16 @@ def _read_btsnoop(raw: bytes) -> list[HciRecord]:
             ts = (ts_us - BTSNOOP_EPOCH_DELTA_US) / 1_000_000
             records.append(HciRecord(ts, kind, data))
         offset = end
-    return records
+    return records, None
+
+
+def _btsnoop_record_fits(raw: bytes, offset: int) -> bool:
+    """True if the btsnoop record at `offset`, header and payload, ends by eof."""
+    start = offset + _BTSNOOP_RECORD.size
+    if start > len(raw):
+        return False
+    (incl_len,) = struct.unpack_from(">I", raw, offset + 4)
+    return start + incl_len <= len(raw)
 
 
 def _h4_kind(h4_type: int, received: bool) -> HciKind | None:
