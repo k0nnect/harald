@@ -1,0 +1,8 @@
+name = "demo lamp"
+vendor = "example co"
+status = "decoded"
+key_scope = "app-wide"
+key_hex = "00112233445566778899aabbccddeeff"
+cipher = "aes-128-ecb"
+service_uuids = ["0000ffe0-0000-1000-8000-00805f9b34fb"]
+summary = "rgb lamp whose colour writes are encrypted with an app-wide key"

@@ -1,0 +1,5 @@
+name = "demo fan"
+vendor = "example co"
+status = "wanted"
+key_scope = "none"
+summary = "desk fan nobody has decoded yet"
