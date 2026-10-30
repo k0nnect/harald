@@ -27,6 +27,7 @@ from harald import __version__, arm, ble, library, workspace
 from harald.apk import analyze_apk
 from harald.capture.timeline import build_timeline, render
 from harald.errors import HaraldError, LibraryError
+from harald.playbook import install_playbook
 
 scanner_cls = ble.BleakScanner
 client_cls = ble.BleakClient
@@ -242,6 +243,12 @@ def _notes_path(slug: str) -> Path:
     return workspace.DEFAULT_ROOT / slug / "notes.md"
 
 
+def _playbook_install(args: argparse.Namespace) -> int:
+    path = install_playbook(args.agent, Path(args.dest))
+    print(f"installed {path}")
+    return 0
+
+
 def _mcp(args: argparse.Namespace) -> int:
     # the mcp sdk is slow to import, and only this command needs it.
     from harald import server
@@ -380,6 +387,25 @@ def _build_parser() -> argparse.ArgumentParser:
     note = command("note", _note, "append a timestamped note for a device")
     note.add_argument("slug")
     note.add_argument("text", nargs="+")
+
+    playbook = sub.add_parser("playbook", help="install the agent playbook")
+    playbook_sub = playbook.add_subparsers(
+        dest="playbook_command", required=True, metavar="<command>"
+    )
+    installed = playbook_sub.add_parser(
+        "install",
+        help="copy the playbook for claude code or codex into a folder",
+        description="copy the playbook into a folder: SKILL.md for claude-code, "
+        "AGENTS.md for codex. claude code reads skills from .claude/skills/<name>/",
+    )
+    installed.set_defaults(func=_playbook_install)
+    installed.add_argument("agent", help="claude-code or codex")
+    installed.add_argument(
+        "--dest",
+        default=".",
+        metavar="folder",
+        help="the folder to write into, created if missing (default .)",
+    )
 
     command("mcp", _mcp, "run the mcp server over stdio for a coding agent")
     return parser

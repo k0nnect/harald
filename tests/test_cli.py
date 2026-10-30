@@ -111,3 +111,18 @@ def test_missing_file_exits_2_with_path(tmp_path, capsys):
     assert cli.main(["capture", "open", str(missing)]) == 2
     err = capsys.readouterr().err
     assert err == f"error: no such file or directory: {missing}\n"
+
+
+def test_playbook_install_writes_doc_into_dest(tmp_path, capsys):
+    dest = tmp_path / ".claude" / "skills" / "harald"
+    assert cli.main(["playbook", "install", "claude-code", "--dest", str(dest)]) == 0
+    assert (dest / "SKILL.md").is_file()
+    assert capsys.readouterr().out == f"installed {dest / 'SKILL.md'}\n"
+
+
+def test_playbook_install_unknown_agent_exits_2(tmp_path, capsys):
+    assert cli.main(["playbook", "install", "cursor", "--dest", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert err == (
+        "error: unknown agent: cursor\n  hint: choose one of: claude-code, codex\n"
+    )
