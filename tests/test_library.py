@@ -10,6 +10,7 @@ from harald.library import (
     load_device,
     protocol_path,
 )
+from harald.workspace import append_note
 
 FIXTURES = Path(__file__).parent / "fixtures" / "devices"
 REPO = Path(__file__).resolve().parents[1]
@@ -87,3 +88,21 @@ def test_list_devices_sorted(root):
 def test_devices_root_resolves_in_dev_checkout():
     assert (REPO / "pyproject.toml").is_file()
     assert devices_root() == REPO / "devices"
+
+
+@pytest.mark.parametrize("slug", ["../x", "/tmp/x", "a/b", "", "Upper"])
+def test_bad_slug_rejected_without_escaping_root(tmp_path, slug):
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / slug
+    target_existed = target.exists()
+    before = sorted(tmp_path.rglob("*"))
+    with pytest.raises(LibraryError) as e:
+        load_device(slug, root=root)
+    assert "invalid device slug" in e.value.message
+    assert "lowercase letters" in e.value.hint
+    with pytest.raises(LibraryError) as e:
+        append_note(slug, "should not land anywhere", root=root, now=0)
+    assert "invalid device slug" in e.value.message
+    assert sorted(tmp_path.rglob("*")) == before
+    assert target.exists() == target_existed

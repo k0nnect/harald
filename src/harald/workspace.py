@@ -12,12 +12,14 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harald.library import check_slug
+
 DEFAULT_ROOT = Path("harald-work")
 
 
 def workspace_dir(slug: str, *, root: Path | None = None) -> Path:
     """`<root>/<slug>/`, created if it does not exist yet."""
-    path = _base(root) / slug
+    path = _slug_dir(slug, root)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -29,7 +31,7 @@ def driver_target(slug: str, *, root: Path | None = None) -> Path:
 
 def read_notes(slug: str, *, root: Path | None = None) -> str:
     """The workspace notes for `slug`, or an empty string when there are none."""
-    path = _base(root) / slug / "notes.md"
+    path = _slug_dir(slug, root) / "notes.md"
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
@@ -42,5 +44,6 @@ def append_note(
         f.write(f"## {stamp.isoformat(timespec='seconds')}\n{text}\n")
 
 
-def _base(root: Path | None) -> Path:
-    return DEFAULT_ROOT if root is None else root
+def _slug_dir(slug: str, root: Path | None) -> Path:
+    """The only place a workspace path is built from a slug; the slug is checked first."""
+    return (DEFAULT_ROOT if root is None else root) / check_slug(slug)

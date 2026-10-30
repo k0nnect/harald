@@ -12,6 +12,7 @@ here, so `validate_meta` refuses any other entry that has `key_hex` set.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from importlib.resources import files
@@ -25,6 +26,7 @@ KeyScope = Literal["app-wide", "none"]
 Status = Literal["decoded", "in progress", "wanted"]
 
 REQUIRED = ("name", "vendor", "status", "key_scope")
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
 @dataclass
@@ -38,6 +40,16 @@ class DeviceMeta:
     cipher: str | None
     service_uuids: list[str]
     summary: str
+
+
+def check_slug(slug: str) -> str:
+    """Return `slug` if it is a plain library slug; refuse anything that could be a path."""
+    if not _SLUG.fullmatch(slug):
+        raise LibraryError(
+            f"invalid device slug: {slug!r}",
+            hint="use lowercase letters, digits and hyphens, e.g. demo-lamp",
+        )
+    return slug
 
 
 def validate_meta(data: dict, slug: str) -> DeviceMeta:
@@ -77,7 +89,7 @@ def devices_root() -> Path:
 
 
 def device_dir(slug: str, *, root: Path | None = None) -> Path:
-    return (devices_root() if root is None else root) / slug
+    return (devices_root() if root is None else root) / check_slug(slug)
 
 
 def driver_path(slug: str, *, root: Path | None = None) -> Path:
