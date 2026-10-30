@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import math
 import subprocess
 import sys
@@ -77,7 +78,9 @@ def _on_device(address: str, action: Callable[[ble.Session], Awaitable[Any]]) ->
         try:
             return await action(conn)
         finally:
-            await conn.close()
+            # a failing disconnect must not replace the result or the original error
+            with contextlib.suppress(*ble.CLEANUP_ERRORS):
+                await conn.close()
 
     return asyncio.run(run())
 

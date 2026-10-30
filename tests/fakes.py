@@ -86,12 +86,15 @@ class FakeScanner:
 
 class FakeClient:
     """Configure with `FakeClient.reset(services=..., reads=..., notifications=...,
-    connect_error=...)`; inspect `FakeClient.writes` afterwards."""
+    connect_error=..., disconnect_error=..., stop_notify_error=...)`; inspect
+    `FakeClient.writes` afterwards."""
 
     service_list: ClassVar[list[FakeService]]
     reads: ClassVar[dict[str, bytes]]
     notifications: ClassVar[dict[str, list[bytes]]]
     connect_error: ClassVar[Exception | None]
+    disconnect_error: ClassVar[Exception | None]
+    stop_notify_error: ClassVar[Exception | None]
     writes: ClassVar[list[tuple[str, bytes, bool | None]]]
 
     @classmethod
@@ -102,11 +105,15 @@ class FakeClient:
         reads: dict[str, bytes] | None = None,
         notifications: dict[str, list[bytes]] | None = None,
         connect_error: Exception | None = None,
+        disconnect_error: Exception | None = None,
+        stop_notify_error: Exception | None = None,
     ) -> None:
         cls.service_list = default_services() if services is None else list(services)
         cls.reads = dict(reads or {})
         cls.notifications = dict(notifications or {})
         cls.connect_error = connect_error
+        cls.disconnect_error = disconnect_error
+        cls.stop_notify_error = stop_notify_error
         cls.writes = []
 
     def __init__(self, address_or_ble_device: Any, **kwargs: Any) -> None:
@@ -120,6 +127,8 @@ class FakeClient:
 
     async def disconnect(self) -> None:
         self.connected = False
+        if type(self).disconnect_error is not None:
+            raise type(self).disconnect_error
 
     @property
     def services(self) -> list[FakeService]:
@@ -142,7 +151,8 @@ class FakeClient:
             callback(char, bytearray(value))
 
     async def stop_notify(self, char: str) -> None:
-        pass
+        if type(self).stop_notify_error is not None:
+            raise type(self).stop_notify_error
 
 
 FakeScanner.reset()

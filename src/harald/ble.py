@@ -8,6 +8,7 @@ device, keyed by the characteristic's real parent service.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass
 
@@ -31,6 +32,9 @@ NOT_FOUND_HINT = (
     "(gadgets accept one connection), then run harald scan"
 )
 _UNAVAILABLE_WORDS = ("turned off", "not authorized", "unauthorized")
+# what a failing cleanup (stop_notify, disconnect) may raise. it is suppressed so it
+# never replaces the result or the error that came before it.
+CLEANUP_ERRORS = (BleakError, OSError, TimeoutError)
 
 
 @dataclass
@@ -145,7 +149,8 @@ class Session:
         try:
             await asyncio.sleep(seconds)
         finally:
-            await self._client.stop_notify(char_uuid)
+            with contextlib.suppress(*CLEANUP_ERRORS):  # keep what was collected
+                await self._client.stop_notify(char_uuid)
         return events
 
     async def close(self) -> None:

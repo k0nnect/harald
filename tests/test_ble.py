@@ -170,3 +170,12 @@ async def test_subscribe_collects_timed_notifications():
     events = await session.subscribe(CHR, 0)
     assert [value for _, value in events] == [b"\x01", b"\x02"]
     assert all(isinstance(t, float) and t >= 0 for t, _ in events)
+
+
+async def test_subscribe_keeps_events_when_stop_notify_fails():
+    session = await connected(
+        notifications={CHR: [b"\x01", b"\x02"]},
+        stop_notify_error=BleakError("Not connected"),
+    )
+    events = await session.subscribe(CHR, 0)
+    assert [value for _, value in events] == [b"\x01", b"\x02"]

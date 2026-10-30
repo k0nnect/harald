@@ -12,6 +12,7 @@ so they are lowercase like all other harald output.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import inspect
 import zipfile
@@ -118,7 +119,9 @@ def build_server(
         try:
             yield conn
         finally:
-            await conn.close()
+            # a failing disconnect must not replace the result or the original error
+            with contextlib.suppress(*ble.CLEANUP_ERRORS):
+                await conn.close()
 
     @tool
     async def scan(timeout: float = 5.0) -> list[Record] | Failure:

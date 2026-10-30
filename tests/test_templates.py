@@ -11,6 +11,7 @@ import tomllib
 from dataclasses import replace
 
 import pytest
+from bleak.exc import BleakError
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
@@ -210,6 +211,21 @@ def test_driver_reports_when_no_device_advertises_the_service(spec, tmp_path, ca
     assert err.startswith(f"error: no device advertising {SVC} found\n")
     assert err == err.lower()
     assert FakeClient.writes == []
+
+
+def test_driver_failing_disconnect_keeps_the_result_and_the_error(
+    spec, tmp_path, capsys
+):
+    FakeClient.reset(disconnect_error=BleakError("Not connected"))
+    driver = load_driver(spec, tmp_path)
+    assert driver.main(["on"]) == 0
+    assert capsys.readouterr().out == "sent on to AA-11\n"
+    assert len(FakeClient.writes) == 1
+    FakeClient.reset(services=[], disconnect_error=BleakError("Not connected"))
+    assert driver.main(["on"]) == 2
+    assert capsys.readouterr().err.startswith(
+        f"error: characteristic {CHR} not found on AA-11\n"
+    )
 
 
 def test_driver_reports_a_bad_value(spec, tmp_path, capsys):

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from bleak import BleakClient, BleakScanner
@@ -199,7 +200,9 @@ async def send(address: str, payload: bytes) -> str:
         response = "write-without-response" not in chars[0].properties
         await client.write_gatt_char(chars[0], payload, response=response)
     finally:
-        await client.disconnect()
+        # a failing disconnect must not replace the result or the original error
+        with contextlib.suppress(BleakError, OSError, TimeoutError):
+            await client.disconnect()
     return address
 
 

@@ -2,6 +2,8 @@
 
 import zipfile
 
+import pytest
+from bleak.exc import BleakError
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
@@ -58,6 +60,25 @@ async def test_write_reaches_client_when_armed():
     )
     assert result == {"writes_left": 4}
     # the default fake characteristic allows write-without-response, so that is used
+    assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
+
+
+@pytest.mark.parametrize(
+    "error", [BleakError("Not connected"), OSError("link lost"), TimeoutError()]
+)
+async def test_failing_disconnect_keeps_the_result_and_the_error(error):
+    FakeClient.reset(disconnect_error=error)
+    server = build_server(client_cls=FakeClient)
+    denied = await call(
+        server, "write_char", address=ADDR, char_uuid=CHR, data_hex="0102"
+    )
+    assert denied["error"] == "writes to AA-11 are locked"
+    assert "harald arm" in denied["hint"]
+    arm("aa-11", writes=5)
+    result = await call(
+        server, "write_char", address=ADDR, char_uuid=CHR, data_hex="0102"
+    )
+    assert result == {"writes_left": 4}
     assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
 
 

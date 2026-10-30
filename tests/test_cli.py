@@ -72,6 +72,18 @@ def test_write_after_arm_reaches_device(capsys):
     assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
 
 
+def test_failing_disconnect_keeps_the_result_and_the_error(capsys):
+    FakeClient.reset(disconnect_error=BleakError("Not connected"))
+    assert cli.main(["write", "AA-11", CHR, "0102"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: writes to AA-11 are locked\n  hint: ")
+    assert "harald arm" in err
+    arm.arm("AA-11", writes=5)
+    assert cli.main(["write", "AA-11", CHR, "0102"]) == 0
+    assert capsys.readouterr().out == f"wrote 0102 to {CHR}; writes left: 4\n"
+    assert FakeClient.writes == [(CHR, b"\x01\x02", False)]
+
+
 @pytest.mark.parametrize(
     ("properties", "flags", "response"),
     [
