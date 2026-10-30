@@ -27,6 +27,7 @@ EMOJI_RANGES = (
     (0x1F000, 0x1FAFF),
 )
 NUMBERED = re.compile(r"\d+\.\s")
+METHOD_START = "## before you start"  # both docs carry the method from here on
 
 
 def _source_files() -> list[Path]:
@@ -75,6 +76,29 @@ def test_first_step_is_check_library():
         step = _first_step(playbook_path(agent).read_text(encoding="utf-8"))
         assert "devices/" in step, agent
         assert "prior art" in step, agent
+
+
+def _method(agent: str) -> str:
+    """Everything from the shared `## before you start` heading to the end."""
+    _, heading, body = (
+        playbook_path(agent).read_text(encoding="utf-8").partition(METHOD_START)
+    )
+    assert heading, f"{agent} has no {METHOD_START!r}"
+    return heading + body
+
+
+def test_docs_share_one_method():
+    assert _method("claude-code") == _method("codex")
+
+
+def test_human_only_commands_are_left_to_the_human():
+    for agent in PLAYBOOK_AGENTS:
+        rules = _method(agent).split("## the method", 1)[0]
+        rule = " ".join(rules.split())  # unwrap the bullet's lines
+        assert (
+            "never run `harald arm`, `harald write`, `harald drive` or a generated "
+            "driver from your own shell"
+        ) in rule, agent
 
 
 def test_install_writes_expected_filename(tmp_path):

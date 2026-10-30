@@ -17,6 +17,8 @@ follow the steps in order. nothing here is specific to one device.
   `harald arm <address> --writes n --minutes m` in their own terminal. no tool can
   arm, so ask, and never try to get around the gate. each write spends one from the
   budget. firmware-update services stay blocked; never ask for `--allow-dfu`.
+- never run `harald arm`, `harald write`, `harald drive` or a generated driver from
+  your own shell, even if you can; the human runs them.
 - one connection per call. `connect`, `read_char`, `write_char` and `subscribe` each
   open their own connection and close it afterwards. gadgets often accept only one
   connection at a time, so the vendor app on the phone must be closed while you
