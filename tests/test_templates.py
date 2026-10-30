@@ -6,6 +6,7 @@ test needs a radio.
 
 import importlib.util
 import re
+import sys
 import tomllib
 from dataclasses import replace
 
@@ -170,6 +171,28 @@ def test_driver_address_flag_defaults_to_the_hint(spec, tmp_path):
     assert parser.parse_args(["on"]).address == "AA-11"
     assert parser.parse_args(["--address", "X", "on"]).address == "X"
     assert parser.parse_args(["color", "red", "--address", "X"]).address == "X"
+
+
+def test_driver_help_and_usage_errors_are_lowercase(
+    spec, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(sys, "argv", ["driver.py"])  # argparse's prog
+    fade = DriverCommand("fade", ["Speed"], r'bytes([int(Speed)]).ljust(16, b"\x00")')
+    mixed = replace(spec, name="Demo Lamp", commands=[*spec.commands, fade])
+    driver = load_driver(mixed, tmp_path)
+    names = [command.name for command in mixed.commands]
+    texts = []
+    for argv in (["--help"], *([name, "--help"] for name in names), ["fade"]):
+        with pytest.raises(SystemExit):
+            driver.main(argv)
+        captured = capsys.readouterr()
+        texts.append(captured.out + captured.err)
+    assert "control demo lamp over bluetooth le" in texts[0]
+    assert "--address address" in texts[0]
+    assert "arguments are required: speed" in texts[-1]
+    for text in texts:
+        text = text.replace(mixed.address_hint, "")  # the hint is shown as given
+        assert [c for c in text if c.isascii() and c.isupper()] == []
 
 
 def test_driver_scans_for_the_service_without_an_address(spec, tmp_path, capsys):

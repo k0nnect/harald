@@ -207,13 +207,14 @@ def add_address(parser: argparse.ArgumentParser, default: str) -> None:
     parser.add_argument(
         "--address",
         default=default,
+        metavar="address",
         help=f"the gadget's address; empty scans for a device advertising {SERVICE_UUID}",
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"control {DEVICE} over bluetooth le. written by harald.",
+        description=f"control {DEVICE.lower()} over bluetooth le. written by harald.",
         epilog=f"default address: {ADDRESS_HINT or 'none, so it scans'}",
     )
     add_address(parser, ADDRESS_HINT)
@@ -221,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, (_function, params) in COMMANDS.items():
         command = commands.add_parser(name, help=f"send {name}")
         for param in params:
-            command.add_argument(param)
+            command.add_argument(param, metavar=param.lower())
         add_address(command, argparse.SUPPRESS)  # so --address works after the values
     return parser
 
