@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harald"
+dynamic = ["version"]
+description = "helps coding agents work out the bluetooth le protocol of gadgets you own"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "k0nnect" }]
+dependencies = [
+    "bleak>=3.0",
+    "mcp>=2.3",
+    "cryptography>=44",
+]
+
+[project.scripts]
+harald = "harald.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "fonttools",
+]
+
+[tool.hatch.version]
+path = "src/harald/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harald"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

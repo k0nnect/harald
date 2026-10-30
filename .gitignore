@@ -2,3 +2,10 @@
 docs/superpowers/
 harald-work/
 scripts/.fonts/
+.venv/
+__pycache__/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
