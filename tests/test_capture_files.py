@@ -1,3 +1,4 @@
+import gzip
 import struct
 
 import pytest
@@ -90,10 +91,10 @@ def _read_warned(tmp_path, raw: bytes, name: str = "capture.pklg"):
     return read_capture_with_warnings(path)
 
 
-def _assert_cut_short_warning(warnings: list[str], offset: int) -> None:
+def _assert_cut_short_warning(warnings: list[str], offset: int, size: int) -> None:
     expected = (
         f"the capture is cut short: the record at byte {offset} runs past the end "
-        "of the file, so it was skipped"
+        f"of the file, so 1 record ({size} bytes) was skipped"
     )
     assert warnings == [expected]
 
@@ -106,7 +107,7 @@ def test_pklg_cut_short_last_record_keeps_the_ones_before(tmp_path, byte_order, 
     raw = make_pklg(PKLG_RECORDS, byte_order=byte_order)[:-cut]
     records, warnings = _read_warned(tmp_path, raw)
     assert [(r.kind, r.data) for r in records] == [("cmd", CMD), ("acl_out", ACL_OUT)]
-    _assert_cut_short_warning(warnings, 40)
+    _assert_cut_short_warning(warnings, 40, 23 - cut)
     assert read_capture(tmp_path / "capture.pklg") == records  # same signature
 
 
@@ -132,7 +133,7 @@ def test_btsnoop_cut_short_last_record_keeps_the_ones_before(tmp_path, cut):
     raw = make_btsnoop(BTSNOOP_RECORDS)[:-cut]
     records, warnings = _read_warned(tmp_path, raw, "btsnoop_hci.log")
     assert [(r.kind, r.data) for r in records] == BTSNOOP_RECORDS[:3]
-    _assert_cut_short_warning(warnings, 111)
+    _assert_cut_short_warning(warnings, 111, 35 - cut)
     assert read_capture(tmp_path / "btsnoop_hci.log") == records  # same signature
 
 
@@ -145,3 +146,56 @@ def test_btsnoop_damage_in_the_middle_still_raises(tmp_path):
         _read(tmp_path, bytes(raw), "btsnoop_hci.log")
     with pytest.raises(CaptureFormatError, match="cut short"):  # no whole record
         _read(tmp_path, make_btsnoop(BTSNOOP_RECORDS[:1])[:-1], "btsnoop_hci.log")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        gzip.compress(b"not a capture\n" * 100, mtime=0),
+        # its first four bytes read as a 66051-byte record that fits in the file
+        bytes(range(256)) * 280,
+    ],
+    ids=["gzip", "binary"],
+)
+def test_non_capture_binary_raises(tmp_path, raw):
+    with pytest.raises(CaptureFormatError) as e:
+        _read(tmp_path, raw, "not-a-capture.bin")
+    assert e.value.hint == "expected a packetlogger .pklg or btsnoop file"
+
+
+# the largest pklg record: 8 timestamp bytes, a type byte, and an acl packet of a
+# 4-byte header plus 65535 bytes of data.
+@pytest.mark.parametrize("byte_order", ["big", "little"])
+def test_pklg_oversize_length_mid_file_raises(tmp_path, byte_order):
+    order = {"big": ">", "little": "<"}[byte_order]
+    raw = bytearray(make_pklg(PKLG_RECORDS, byte_order=byte_order))
+    raw[16:20] = struct.pack(order + "I", 65549)  # the second record's len
+    with pytest.raises(CaptureFormatError) as e:
+        _read(tmp_path, bytes(raw))
+    assert e.value.hint == "expected a packetlogger .pklg or btsnoop file"
+    # the largest plausible len that runs past the end is still a cut tail
+    raw[16:20] = struct.pack(order + "I", 65548)
+    records, warnings = _read_warned(tmp_path, bytes(raw))
+    assert [(r.kind, r.data) for r in records] == [("cmd", CMD)]
+    _assert_cut_short_warning(warnings, 16, len(raw) - 16)
+
+
+def test_btsnoop_oversize_length_mid_file_raises(tmp_path):
+    raw = bytearray(make_btsnoop(BTSNOOP_RECORDS))
+    raw[44:52] = struct.pack(">II", 65541, 65541)  # the second record's lengths
+    with pytest.raises(CaptureFormatError, match="offset 44") as e:
+        _read(tmp_path, bytes(raw), "btsnoop_hci.log")
+    assert e.value.hint == "expected a packetlogger .pklg or btsnoop file"
+    # one byte less is a plausible h4 acl packet, so it reads as a cut tail
+    raw[44:52] = struct.pack(">II", 65540, 65540)
+    records, warnings = _read_warned(tmp_path, bytes(raw), "btsnoop_hci.log")
+    assert [(r.kind, r.data) for r in records] == BTSNOOP_RECORDS[:1]
+    _assert_cut_short_warning(warnings, 44, len(raw) - 44)
+
+
+def test_btsnoop_record_longer_than_its_packet_raises(tmp_path):
+    raw = bytearray(make_btsnoop(BTSNOOP_RECORDS))
+    raw[44:48] = struct.pack(">I", 1)  # orig_len 1, while incl_len is 7
+    with pytest.raises(CaptureFormatError, match="offset 44") as e:
+        _read(tmp_path, bytes(raw), "btsnoop_hci.log")
+    assert e.value.hint == "expected a packetlogger .pklg or btsnoop file"

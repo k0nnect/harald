@@ -19,8 +19,13 @@ HciKind = Literal["cmd", "evt", "acl_out", "acl_in"]
 HINT = "expected a packetlogger .pklg or btsnoop file"
 CUT_SHORT_WARNING = (
     "the capture is cut short: the record at byte {offset} runs past the end of the "
-    "file, so it was skipped"
+    "file, so 1 record ({size} bytes) was skipped"
 )
+
+# the largest hci packet: an acl packet's 4-byte header plus the most data its 16-bit
+# length field allows. commands, events and iso packets are all smaller. a record
+# length above what this needs means the file is not a capture, or is damaged.
+MAX_HCI_PACKET = 4 + 0xFFFF
 
 # packetlogger (wireshark wiretap/packetlogger.c): u32 len, u32 ts_secs, u32 ts_usecs,
 # then len - 8 bytes whose first byte is the type. len counts the timestamp too.
@@ -31,6 +36,7 @@ _PKLG_KINDS: dict[int, HciKind] = {
     0x03: "acl_in",
 }
 _PKLG_MIN_LEN = 9  # 8 timestamp bytes + the type byte
+_PKLG_MAX_LEN = _PKLG_MIN_LEN + MAX_HCI_PACKET
 
 # btsnoop: magic, u32 version, u32 datalink, then records of u32 orig_len,
 # u32 incl_len, u32 flags, u32 drops, i64 ts_us. all big-endian.
@@ -42,6 +48,7 @@ _DATALINK_H4 = 1002  # first byte of each record is the h4 type
 # btsnoop timestamps count microseconds from year 0; android's writer and wireshark
 # both use this delta to the unix epoch.
 BTSNOOP_EPOCH_DELTA_US = 0x00DCDDB30F2F8000
+_BTSNOOP_MAX_LEN = 1 + MAX_HCI_PACKET  # an h4 type byte, then the packet
 _FLAG_RECEIVED = 0x01
 _FLAG_CMD_EVT = 0x02
 _H4_CMD, _H4_ACL, _H4_EVT = 0x01, 0x02, 0x04
@@ -69,15 +76,18 @@ def read_capture_with_warnings(path: Path) -> tuple[list[HciRecord], list[str]]:
 
     A capture copied while it was still recording can end partway through its last
     record. The records before it are kept, as long as at least one is whole, and a
-    warning names where the cut record starts. Damage anywhere else still raises.
+    warning says where the cut record starts and how many bytes were skipped with it.
+    Only a length some hci packet could have counts as such a cut: a longer one
+    raises, as does damage anywhere else.
     """
     raw = Path(path).read_bytes()
     if raw.startswith(BTSNOOP_MAGIC):
         records, cut_at = _read_btsnoop(raw)
     else:
         records, cut_at = _read_pklg(raw)
-    warnings = [] if cut_at is None else [CUT_SHORT_WARNING.format(offset=cut_at)]
-    return records, warnings
+    if cut_at is None:
+        return records, []
+    return records, [CUT_SHORT_WARNING.format(offset=cut_at, size=len(raw) - cut_at)]
 
 
 def _error(message: str) -> CaptureFormatError:
@@ -88,12 +98,13 @@ def _walk(raw: bytes, order: str) -> int:
     """How many bytes whole pklg records in this byte order cover from the start.
 
     The chain must reach eof, except that its last record may run past it. 0 means
-    the chain breaks (a len below the minimum) or not one record is whole.
+    the chain breaks (a len below the minimum or above the largest hci record) or
+    not one record is whole.
     """
     offset = 0
     while len(raw) - offset >= 4:
         (length,) = struct.unpack_from(order + "I", raw, offset)
-        if length < _PKLG_MIN_LEN:
+        if not _PKLG_MIN_LEN <= length <= _PKLG_MAX_LEN:
             return 0
         if length > len(raw) - offset - 4:
             break  # the last record is cut short
@@ -171,11 +182,25 @@ def _read_btsnoop(raw: bytes) -> tuple[list[HciRecord], int | None]:
 
 
 def _btsnoop_record_fits(raw: bytes, offset: int) -> bool:
-    """True if the btsnoop record at `offset`, header and payload, ends by eof."""
+    """True if the btsnoop record at `offset`, header and payload, ends by eof.
+
+    Raises when its whole header holds a length no hci packet needs, or keeps more
+    bytes than the packet had.
+    """
     start = offset + _BTSNOOP_RECORD.size
     if start > len(raw):
         return False
-    (incl_len,) = struct.unpack_from(">I", raw, offset + 4)
+    orig_len, incl_len = struct.unpack_from(">II", raw, offset)
+    if incl_len > _BTSNOOP_MAX_LEN:
+        raise _error(
+            f"btsnoop record at offset {offset} claims {incl_len} bytes, "
+            "more than any hci packet"
+        )
+    if incl_len > orig_len:
+        raise _error(
+            f"btsnoop record at offset {offset} keeps {incl_len} bytes "
+            f"of a {orig_len}-byte packet"
+        )
     return start + incl_len <= len(raw)
 
 
