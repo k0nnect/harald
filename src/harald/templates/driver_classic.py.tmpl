@@ -1,0 +1,384 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "cryptography>=44",
+#     "pyobjc-framework-IOBluetooth>=11; sys_platform == 'darwin'",
+# ]
+# ///
+"""a standalone driver for one bluetooth classic gadget, written by harald.
+
+it has its own command line and does not need harald. it runs on a mac only. run it
+with uv, which installs cryptography and pyobjc's IOBluetooth from the block above:
+
+    uv run driver.py --help
+    uv run driver.py <command> [values]
+
+the gadget has to be paired with this mac and connected to it. each command opens
+the rfcomm channel that the gadget's service record lists for SERVICE_UUID, writes
+each of INIT_PAYLOADS as it is, then the command's plaintext payload, encrypted when
+CIPHER is set. when REPLY_SECONDS is above 0 it prints what the gadget sent back.
+the channel is closed on every way out. with no --address and no ADDRESS_HINT, it
+takes the paired device whose name starts with NAME_HINT or, when NAME_HINT is empty
+too, the only paired device whose service records list SERVICE_UUID.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import sys
+import time
+import types
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+DEVICE = $device
+VENDOR = $vendor
+ADDRESS_HINT = $address_hint  # empty: look it up by NAME_HINT, else SERVICE_UUID
+# with no address, the gadget is the paired device whose name starts with this. when
+# this is empty too, it is the only paired device that lists SERVICE_UUID.
+NAME_HINT = $name_hint
+SERVICE_UUID = $service_uuid  # the rfcomm service; its channel comes from its record
+CIPHER = $cipher  # None, "aes-ecb" or "aes-cbc-zero-iv"
+KEY_HEX = $key_hex
+INIT_PAYLOADS = $init_payloads  # hex, written as they are right after opening
+REPLY_SECONDS = $reply_seconds  # 0: print no reply
+OPEN_SECONDS = 5.0
+WRITE_SECONDS = 3.0
+CLOSE_SECONDS = 1.0
+
+BLUETOOTH_HINT = (
+    "turn bluetooth on and allow your terminal app in "
+    "system settings > privacy & security > bluetooth"
+)
+PAIR_HINT = "pair it in system settings > bluetooth"
+CONNECT_HINT = "turn it on and connect it to this mac in system settings > bluetooth"
+STUCK_HINT = (
+    "the mac's bluetooth is stuck: turn bluetooth off and on in the menu bar, "
+    "then try again"
+)
+BUSY_HINT = "close the vendor app on your phone, or turn the phone's bluetooth off"
+TIMEOUT_HINT = (
+    "move closer and try again; if it keeps happening, "
+    "turn the mac's bluetooth off and on"
+)
+
+$payload_code
+
+
+def wanted_device(name_hint: str = NAME_HINT, service_uuid: str = SERVICE_UUID) -> str:
+    """What the lookup takes when there is no address, in words."""
+    if name_hint:
+        return f"paired device named {name_hint}*"
+    return f"paired device with service {service_uuid}"
+
+
+# --- the mac's rfcomm -----------------------------------------------------------
+
+# IOReturn values (IOKit/IOReturn.h). pyobjc hands them over signed, so a status is
+# masked to 32 bits before it is compared.
+IO_ERROR, IO_BUSY, IO_TIMEOUT = 0xE00002BC, 0xE00002D5, 0xE00002D6
+
+# IOBluetooth does not retain its delegates, and a late callback into a freed one
+# would crash, so delegates and channels live until the process ends.
+KEEP_ALIVE = []
+
+
+def mac_modules() -> types.SimpleNamespace:
+    """IOBluetooth and the pyobjc parts open_link uses. They are imported here, not
+    at the top, so that the driver loads anywhere."""
+    if sys.platform != "darwin":
+        raise DriverError("this driver needs a mac", "run it on a mac with bluetooth")
+    try:
+        import IOBluetooth
+        import objc
+        from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop
+    except ImportError:
+        raise DriverError(
+            "pyobjc-framework-iobluetooth is missing",
+            "run the driver with uv, which installs it: uv run driver.py --help",
+        ) from None
+    return types.SimpleNamespace(
+        IOBluetooth=IOBluetooth,
+        objc=objc,
+        NSDate=NSDate,
+        NSDefaultRunLoopMode=NSDefaultRunLoopMode,
+        NSObject=NSObject,
+        NSRunLoop=NSRunLoop,
+    )
+
+
+def normal_address(text: str) -> str:
+    """An address in lowercase colon form; IOBluetooth gives it with hyphens."""
+    return text.strip().lower().replace("-", ":")
+
+
+def pick_device(paired, address: str, name_hint: str, lists_service, service_uuid: str):
+    """The paired device to open: the one at `address`. Without an address, a device
+    whose name starts with `name_hint`, a connected one first. With neither, the one
+    device that `lists_service`: a common service such as the serial port can be on
+    several gadgets, so more than one is refused rather than guessed between."""
+    if address:
+        wanted = normal_address(address)
+        for device in paired:
+            if normal_address(str(device.addressString() or "")) == wanted:
+                return device
+        raise DriverError(f"{wanted} is not paired with this mac", PAIR_HINT)
+    if name_hint:
+        matches = [d for d in paired if str(d.name() or "").startswith(name_hint)]
+    else:
+        matches = [d for d in paired if lists_service(d)]
+    if not matches:
+        raise DriverError(
+            f"no {wanted_device(name_hint, service_uuid)} found", PAIR_HINT
+        )
+    if name_hint:
+        connected = [device for device in matches if device.isConnected()]
+        return (connected or matches)[0]
+    if len(matches) > 1:
+        found = ", ".join(normal_address(str(d.addressString() or "")) for d in matches)
+        raise DriverError(
+            f"more than one paired device lists service {service_uuid}: {found}",
+            "pass --address with the one to use",
+        )
+    return matches[0]
+
+
+def open_error(status: int, connected: bool, address: str, channel: int) -> DriverError:
+    """The error for an rfcomm open of `channel` that ended with IOReturn `status`."""
+    status &= 0xFFFFFFFF
+    if status == IO_BUSY:
+        return DriverError(f"channel {channel} on {address} is busy", BUSY_HINT)
+    if connected and status in (IO_ERROR, IO_TIMEOUT):
+        return DriverError(f"the mac would not open a channel to {address}", STUCK_HINT)
+    if not connected:
+        return DriverError(f"{address} is not connected", CONNECT_HINT)
+    return DriverError(f"bluetooth error: open status {status:#x}")
+
+
+def delegate_class(mac: types.SimpleNamespace):
+    """The objective-c class that records IOBluetooth's callbacks for one channel.
+    It is defined once per process, since a second class of the same name fails."""
+    try:
+        return mac.objc.lookUpClass("HaraldDriverDelegate")
+    except mac.objc.nosuchclass_error:
+        pass
+
+    class HaraldDriverDelegate(mac.NSObject):
+        """Stores what IOBluetooth reports. A python error must never unwind into
+        IOBluetooth, so each callback only records."""
+
+        def init(self):
+            this = mac.objc.super(HaraldDriverDelegate, self).init()
+            if this is None:
+                return None
+            this.open_status = None
+            this.writes_done = 0
+            this.write_status = 0
+            this.closed = False
+            this.received = bytearray()
+            return this
+
+        def rfcommChannelOpenComplete_status_(self, channel, status):
+            self.open_status = status
+
+        def rfcommChannelData_data_length_(self, channel, data, length):
+            try:
+                self.received += bytes(data[:length])
+            except (TypeError, ValueError):  # no data pointer: nothing to keep
+                pass
+
+        def rfcommChannelWriteComplete_refcon_status_(self, channel, refcon, status):
+            self.write_status = status
+            self.writes_done += 1
+
+        def rfcommChannelClosed_(self, channel):
+            self.closed = True
+
+    return HaraldDriverDelegate
+
+
+def open_link(address_hint: str, name_hint: str, service_uuid: str):
+    """Open the gadget's rfcomm channel for `service_uuid` and return a MacLink to
+    it: write(bytes), read(seconds) -> bytes, close(), and the address it reached.
+
+    The gadget is the paired device at `address_hint` or, when that is empty, the
+    one `pick_device` finds. IOBluetooth calls back only on the main thread's run
+    loop, so this runs on the main thread and pumps that run loop while it waits.
+    """
+    mac = mac_modules()
+    paired = mac.IOBluetooth.IOBluetoothDevice.pairedDevices()
+    if paired is None:
+        raise DriverError(
+            "bluetooth is off or not allowed for this app", BLUETOOTH_HINT
+        )
+    # a 128-bit uuid also matches a record that lists its 16-bit form
+    uuid = mac.IOBluetooth.IOBluetoothSDPUUID.uuidWithBytes_length_(
+        bytes.fromhex(service_uuid.replace("-", "")), 16
+    )
+    device = pick_device(
+        list(paired),
+        address_hint,
+        name_hint,
+        lambda device: device.getServiceRecordForUUID_(uuid) is not None,
+        service_uuid,
+    )
+    address = normal_address(str(device.addressString() or ""))
+    if not device.isConnected():
+        raise DriverError(f"{address} is not connected", CONNECT_HINT)
+    # the channel number comes from the mac's cached service record
+    record = device.getServiceRecordForUUID_(uuid)
+    status, channel_id = -1, None
+    if record is not None:
+        status, channel_id = record.getRFCOMMChannelID_(None)
+    if status != 0:
+        raise DriverError(
+            f"{address} lists no rfcomm channel for {service_uuid}",
+            "turn the gadget off and on, connect it to this mac, then try again",
+        )
+    delegate = delegate_class(mac).alloc().init()
+    KEEP_ALIVE.append(delegate)
+    status, channel = device.openRFCOMMChannelAsync_withChannelID_delegate_(
+        None, channel_id, delegate
+    )
+    if channel is not None:
+        KEEP_ALIVE.append(channel)
+    link = MacLink(mac, channel, delegate, address)
+    try:
+        if status != 0 or channel is None:
+            raise open_error(status, bool(device.isConnected()), address, channel_id)
+        if not link.pump_until(lambda: delegate.open_status is not None, OPEN_SECONDS):
+            # the link is up and the open never finishes: the stuck-mac signature
+            if device.isConnected():
+                raise DriverError(
+                    f"the mac would not open a channel to {address}", STUCK_HINT
+                )
+            raise DriverError(f"{address} is not connected", CONNECT_HINT)
+        if delegate.open_status != 0:
+            connected = bool(device.isConnected())
+            raise open_error(delegate.open_status, connected, address, channel_id)
+        try:
+            link.mtu = int(channel.getMTU())
+        except Exception as exc:  # the channel went away as it opened
+            raise DriverError(
+                f"bluetooth error: no mtu for channel {channel_id}"
+            ) from exc
+    except BaseException:
+        link.close()
+        raise
+    return link
+
+
+class MacLink:
+    """write, read and close over an open IOBluetoothRFCOMMChannel."""
+
+    def __init__(self, mac, channel, delegate, address: str) -> None:
+        self.mac = mac
+        self.channel = channel
+        self.delegate = delegate
+        self.address = address
+        self.mtu = 0
+        self.closing = False
+
+    def pump_until(self, done, seconds: float) -> bool:
+        """Run the main thread's run loop, where IOBluetooth calls back, until
+        `done()` or until `seconds` pass. Returns whether `done()`."""
+        mac = self.mac
+        loop = mac.NSRunLoop.currentRunLoop()
+        deadline = time.monotonic() + seconds
+        while not done():
+            if time.monotonic() >= deadline:
+                return False
+            with mac.objc.autorelease_pool():
+                ran = loop.runMode_beforeDate_(
+                    mac.NSDefaultRunLoopMode,
+                    mac.NSDate.dateWithTimeIntervalSinceNow_(0.01),
+                )
+            if not ran:  # nothing on the run loop yet, so it returned at once
+                time.sleep(0.01)
+        return True
+
+    def write(self, data: bytes) -> None:
+        """Write `data` in pieces of at most the channel's mtu, each one waiting for
+        its write-complete."""
+        size = self.mtu if self.mtu > 0 else max(len(data), 1)
+        for start in range(0, len(data), size):
+            self._write(bytes(data[start : start + size]))
+
+    def _write(self, piece: bytes) -> None:
+        delegate = self.delegate
+        if self.closing or delegate.closed:
+            raise DriverError("bluetooth error: the channel is closed")
+        before = delegate.writes_done
+        status = self.channel.writeAsync_length_refcon_(piece, len(piece), None)
+        if status != 0:
+            raise DriverError(f"bluetooth error: write status {status & 0xFFFFFFFF:#x}")
+        if not self.pump_until(
+            lambda: delegate.writes_done > before or delegate.closed, WRITE_SECONDS
+        ):
+            raise DriverError(f"{self.address} stopped answering", TIMEOUT_HINT)
+        if delegate.writes_done <= before:
+            raise DriverError("bluetooth error: the channel closed")
+        if delegate.write_status != 0:
+            status = delegate.write_status & 0xFFFFFFFF
+            raise DriverError(f"bluetooth error: write status {status:#x}")
+
+    def read(self, seconds: float) -> bytes:
+        """Wait `seconds`, less if the channel closes, then return everything that
+        arrived since the open or the last read: b"" if nothing did."""
+        delegate = self.delegate
+        self.pump_until(lambda: delegate.closed, seconds)
+        data = bytes(delegate.received)
+        delegate.received.clear()
+        return data
+
+    def close(self) -> None:
+        """Close the channel and wait for IOBluetooth to confirm it. Never raises.
+
+        A channel left open makes the mac refuse every later open until its
+        bluetooth is turned off and on, so this runs on every way out.
+        """
+        if self.closing:
+            return
+        self.closing = True
+        if self.channel is None or self.delegate.closed:
+            return
+        with contextlib.suppress(Exception):
+            self.channel.closeChannel()
+            self.pump_until(lambda: self.delegate.closed, CLOSE_SECONDS)
+
+
+# --- the command line -----------------------------------------------------------
+
+
+$cli_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    _function, params = COMMANDS[args.command]
+    values = [getattr(args, param) for param in params]
+    try:
+        payload = encrypt(build_payload(args.command, values))
+        link = open_link(args.address, NAME_HINT, SERVICE_UUID)
+        try:
+            for init in INIT_PAYLOADS:
+                link.write(bytes.fromhex(init))
+            link.write(payload)
+            print(f"sent {args.command} to {link.address}")
+            if REPLY_SECONDS > 0:
+                reply = link.read(REPLY_SECONDS).hex() or f"none in {REPLY_SECONDS:g} s"
+                print(f"reply: {reply}")
+        finally:
+            # a failing close must not replace the result or the original error
+            with contextlib.suppress(Exception):
+                link.close()
+    except DriverError as exc:
+        return fail(exc.message, exc.hint)
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

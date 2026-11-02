@@ -29,3 +29,7 @@ class ToolMissing(HaraldError):
 
 class LibraryError(HaraldError):
     """A device library entry is missing or invalid."""
+
+
+class ProtectedChannel(HaraldError):
+    """A bluetooth classic channel carries a standard profile harald never opens."""

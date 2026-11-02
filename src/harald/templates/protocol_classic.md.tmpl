@@ -1,0 +1,31 @@
+# $slug protocol
+
+how to control `$name` (vendor: $vendor) over bluetooth classic. every command
+below was checked against the real gadget. `driver.py`, beside this file, sends them.
+
+## rfcomm
+
+- service: `$service_uuid`
+- channel: whichever one the device's service record lists for that service, looked
+  up on every run, so it is not fixed here
+- device: $device
+
+the gadget has to be paired with the mac and connected to it.
+
+## opening
+
+$opening
+
+## encryption
+
+$encryption
+
+## commands
+
+each payload is a python expression over the command's values, which arrive as
+strings from the command line. `rgb_bytes(value)` turns a colour name such as
+`pink`, or 6-digit hex such as `ff8800`, into three bytes r, g, b.
+$payload_note
+$reply
+
+$commands

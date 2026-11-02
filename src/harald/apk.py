@@ -10,8 +10,9 @@ flutter and react-native apps keep their ble logic in a compiled blob (a dart or
 javascript bundle), so jadx never sees it; for those the report just says so.
 
 The scan references the android gatt api (`BluetoothGattCharacteristic`,
-`writeCharacteristic`) and `javax.crypto` (`SecretKeySpec`, `Cipher`) by name to
-find places worth reading. It does not reproduce how those apis are used; it only
+`writeCharacteristic`), the classic rfcomm socket calls
+(`createRfcommSocketToServiceRecord`, `listenUsingRfcommWithServiceRecord`) and
+`javax.crypto` (`SecretKeySpec`, `Cipher`) by name to find places worth reading. It does not reproduce how those apis are used; it only
 reports file:line locations an agent should open.
 
 A real app decompiles to tens of thousands of files, mostly third-party libraries.
@@ -41,7 +42,13 @@ from harald.errors import HaraldError, ToolMissing
 
 Framework = Literal["native", "flutter", "react-native"]
 CandidateKind = Literal[
-    "service-uuid", "char-uuid", "aes-key", "base64-blob", "command-builder"
+    "service-uuid",
+    "char-uuid",
+    "aes-key",
+    "base64-blob",
+    "command-builder",
+    "rfcomm-uuid",
+    "rfcomm-socket",
 ]
 
 _BUNDLE_SUFFIXES = (".xapk", ".apks")
@@ -89,6 +96,8 @@ _LIBRARY_TREES = (
 
 # bluetooth sig base uuid; a 16-bit uuid 0xffXX expands to 0000ffXX-<base tail>.
 _SIG_BASE = "0000{:04x}-0000-1000-8000-00805f9b34fb"
+# the serial port profile uuid, the one most classic gadgets open an rfcomm socket on.
+SPP_UUID = "00001101-0000-1000-8000-00805f9b34fb"
 
 _UUID128 = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -108,6 +117,11 @@ _KEY_OR_CIPHER = re.compile(
     r"\bnew\s+(?:[\w$]+\.)*SecretKeySpec\s*\(|\bCipher\s*\.\s*getInstance\s*\("
 )
 _BYTE_ARRAY = re.compile(r"new\s+byte\s*\[")
+# the android calls that open a classic rfcomm socket, as a client or a server.
+_RFCOMM_CALL = re.compile(
+    r"\bcreate(?:Insecure)?RfcommSocketToServiceRecord\("
+    r"|\blistenUsing(?:Insecure)?RfcommWithServiceRecord\("
+)
 
 _SNIPPET_MAX = 200
 # how many earlier lines a wrapped statement may span when labelling a uuid.
@@ -127,6 +141,9 @@ class Candidate:
 @dataclass
 class ApkReport:
     """`gatt_uuids` and `candidates` are capped at `MAX_PER_KIND` per kind.
+
+    `gatt_uuids` keeps its v0.1 name but holds every uuid found, rfcomm ones too;
+    the candidates label each one as a service, char or rfcomm uuid.
 
     `totals` counts everything the scan found, before the cap: `gatt_uuids` and one
     entry per candidate kind. It stays empty when no sources were scanned.
@@ -366,7 +383,7 @@ def _is_library(source: str) -> bool:
 def _scan_sources(
     jadx_dir: Path, package: str | None
 ) -> tuple[list[str], list[Candidate]]:
-    """Collect gatt uuids and flag lines worth reading across decompiled sources.
+    """Collect uuids and flag lines worth reading across decompiled sources.
 
     Both lists are in scan order: the app's own package first. Nothing is capped.
     """
@@ -389,10 +406,13 @@ def _scan_sources(
             for start, uuid in _uuids_in(line):
                 uuids[uuid] = None
                 head = f"{_statement_head(lines, idx)} {line[:start]}"
-                kind = _uuid_kind(head)
+                kind = _uuid_kind(head, uuid)
                 if kind not in uuid_kinds:
                     uuid_kinds.append(kind)
             candidates.extend(Candidate(k, location, snippet) for k in uuid_kinds)
+
+            if _RFCOMM_CALL.search(line):
+                candidates.append(Candidate("rfcomm-socket", location, snippet))
 
             if _KEY_OR_CIPHER.search(line):
                 candidates.append(Candidate("aes-key", location, snippet))
@@ -420,7 +440,7 @@ def _key_blob(text: str) -> bool:
 
 
 def _uuids_in(line: str) -> list[tuple[int, str]]:
-    """(column, uuid) for every gatt uuid on a line, lowercased, 16-bit expanded."""
+    """(column, uuid) for every uuid on a line, lowercased, 16-bit expanded."""
     out = [(m.start(), m.group(0).lower()) for m in _UUID128.finditer(line)]
     out += [
         (m.start(), _SIG_BASE.format(int(m.group(0), 16)))
@@ -443,9 +463,15 @@ def _statement_head(lines: list[str], idx: int) -> str:
     return " ".join(head)
 
 
-def _uuid_kind(head: str) -> str:
-    """Label a uuid by the nearest of "service" or "char" before it in its statement."""
+def _uuid_kind(head: str, uuid: str) -> str:
+    """Label a uuid by what comes before it in its statement.
+
+    It is an rfcomm uuid when its statement mentions rfcomm before it, or when it is
+    the spp uuid; otherwise the nearest of "service" or "char" decides.
+    """
     lowered = head.lower()
+    if "rfcomm" in lowered or uuid == SPP_UUID:
+        return "rfcomm-uuid"
     if lowered.rfind("service") > lowered.rfind("char"):
         return "service-uuid"
     return "char-uuid"

@@ -4,9 +4,9 @@ Every tool returns plain json values and never raises at the agent. A `HaraldErr
 comes back as `{"error": message, "hint": hint}`; a missing file, bad hex, malformed
 toml or a non-zip apk comes back as `{"error": <lowercased text>, "hint": ""}`.
 
-Writes go through `ble.Session.write`, which spends the human's `harald arm` budget.
-There is deliberately no tool that arms, disarms or enables writes, so the agent
-cannot approve its own writes through these tools. Tool docstrings are the
+Writes go through `ble.Session.write` and `classic.send`, which spend the human's
+`harald arm` budget. There is deliberately no tool that arms, disarms or enables
+writes, so the agent cannot approve its own writes through these tools. Tool docstrings are the
 descriptions the agent reads, so they are lowercase like all other harald output.
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import inspect
+import sys
 import zipfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -25,7 +26,7 @@ from typing import Any
 from bleak.exc import BleakError
 from mcp.server import MCPServer
 
-from harald import __version__, analyze, apk, ble, library, workspace
+from harald import __version__, analyze, apk, ble, classic, library, workspace
 from harald.capture.timeline import build_timeline, render
 from harald.errors import HaraldError
 
@@ -48,15 +49,21 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "load_device",
         "read_notes",
         "save_note",
+        "classic_devices",
+        "classic_services",
+        "classic_send",
+        "classic_listen",
     }
 )
 
 INSTRUCTIONS = (
-    "harald helps you work out the bluetooth le protocol of a gadget the user owns: "
-    "scan and connect, decode phone captures, compare payloads, test candidate keys, "
-    "scan the vendor's android app, and keep notes per device. writes are refused "
-    "until the human runs `harald arm <address>` in their own terminal; no tool can "
-    'arm. a tool that fails returns {"error": ..., "hint": ...}: act on the hint.'
+    "harald helps you work out the bluetooth le or classic (rfcomm) protocol of a "
+    "gadget the user owns: scan and connect over le, talk to the rfcomm channels of "
+    "paired classic devices, decode phone captures, compare payloads, test candidate "
+    "keys, scan the vendor's android app, and keep notes per device. write_char and "
+    "classic_send are refused until the human runs `harald arm <address>` in their "
+    "own terminal; no tool can arm. a tool that fails returns "
+    '{"error": ..., "hint": ...}: act on the hint.'
 )
 
 # HaraldError carries its own hint; the rest are what the core modules let through
@@ -102,9 +109,13 @@ def _from_hex(values: list[str]) -> list[bytes]:
 
 
 def build_server(
-    *, scanner_cls=ble.BleakScanner, client_cls=ble.BleakClient
+    *,
+    scanner_cls=ble.BleakScanner,
+    client_cls=ble.BleakClient,
+    classic_backend: classic.Backend | None = None,
 ) -> MCPServer:
-    """An `MCPServer` with every harald tool registered. BLE backends are injectable."""
+    """An `MCPServer` with every harald tool registered. BLE backends and the classic
+    backend are injectable; with no classic backend, classic uses the mac's."""
     mcp = MCPServer("harald", instructions=INSTRUCTIONS, version=__version__)
 
     def tool(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -192,19 +203,32 @@ def build_server(
         offset: int = 0,
         handle: int | None = None,
         conn: int | None = None,
+        channel: int | None = None,
     ) -> str | Failure:
-        """show the att timeline of a phone capture (packetlogger .pklg or btsnoop log).
+        """show the att and rfcomm timeline of a phone capture (.pklg or btsnoop log).
 
-        one line per att event with time, acl connection, direction, op, handle, uuid
-        and value hex; any warnings come first and a `showing a–b of n events` footer
-        comes last. a capture can hold several connections, each with its own handles.
-        page with limit and offset. handle (an integer, e.g. 18 for h=0x0012) keeps
-        only events on that handle, conn (e.g. 64 for c=0x0040) only events on that
-        connection, and offset then counts those filtered events. relative paths
-        resolve against the server's working directory.
+        one line per event with time, acl connection, direction, op and value hex. att
+        events show their handle and uuid; rfcomm events (rfcomm data, rfcomm_open and
+        rfcomm_close) show their server channel, e.g. ch=9. any warnings come first and
+        a `showing a–b of n events` footer comes last. a capture can hold several
+        connections, each with its own handles. page with limit and offset. handle (an
+        integer, e.g. 18 for h=0x0012) keeps only att events on that handle, channel
+        (e.g. 9) only rfcomm events on that channel, conn (e.g. 64 for c=0x0040) only
+        events on that connection, and offset then counts those filtered events. for a
+        bluetooth classic gadget, capture its android app in a btsnoop log: an iphone
+        app reaches classic gadgets only through apple iap2, which harald shows as
+        rfcomm data but can't unwrap yet. relative paths resolve against the server's
+        working directory.
         """
         timeline = build_timeline(Path(path))
-        return render(timeline, limit=limit, offset=offset, handle=handle, conn=conn)
+        return render(
+            timeline,
+            limit=limit,
+            offset=offset,
+            handle=handle,
+            conn=conn,
+            channel=channel,
+        )
 
     @tool
     def diff(payloads_hex: list[str]) -> Record | Failure:
@@ -227,8 +251,9 @@ def build_server(
     def guess_checks(payload_hex: str) -> list[str] | Failure:
         """name the checksums and length fields one hex payload is consistent with.
 
-        checks sum8 and xor8 in the last byte, crc16-ccitt in the last two, and a
-        length byte at position 0 or 1.
+        checks sum8 and xor8 in the last byte, and the byte before a trailing end
+        marker, over the bytes after a leading start marker; crc16-ccitt in the last
+        two; and a length byte at position 0 or 1.
         """
         return analyze.guess_checks(bytes.fromhex(payload_hex))
 
@@ -250,9 +275,10 @@ def build_server(
     def analyze_apk(path: str) -> Record | Failure:
         """statically analyze a vendor android app (.apk, .xapk or .apks) already on disk.
 
-        detects the framework. for a native app it runs jadx and lists gatt uuids and
-        file:line candidates (uuids, aes keys, base64 blobs, command builders) to open
-        under jadx_dir, the app's own package first and third-party libraries skipped.
+        detects the framework. for a native app it runs jadx and lists the uuids
+        (gatt and rfcomm) in gatt_uuids and file:line candidates (uuids, aes keys,
+        base64 blobs, command builders, rfcomm socket calls) to open under jadx_dir,
+        the app's own package first and third-party libraries skipped.
         each list keeps at most 50 per kind; totals has the full counts, and when
         anything was cut a warning names the file under jadx_dir that lists them all.
         flutter and react-native apps keep their ble code compiled, so the warnings
@@ -293,9 +319,104 @@ def build_server(
         workspace.append_note(slug, text)
         return {"saved": True}
 
+    @tool
+    async def classic_devices() -> list[Record] | Failure:
+        """list the bluetooth classic devices paired with this mac.
+
+        connected says whether each is linked to the mac now. use an address from here
+        with classic_services, classic_send and classic_listen.
+        """
+        devices = await classic.paired_devices(backend=classic_backend)
+        return [asdict(d) for d in devices]
+
+    @tool
+    async def classic_services(
+        address: str, refresh: bool = False
+    ) -> list[Record] | Failure:
+        """list a paired classic device's service records from the mac's sdp cache.
+
+        each record has a name, service-class uuids and an rfcomm channel (null when
+        rfcomm cannot reach it). protected channels are standard profiles such as
+        hands-free and headset, which harald never opens; firmware_update channels
+        stay blocked for writes. refresh=true asks the device again instead of
+        trusting the cache.
+        """
+        records = await classic.services(
+            address, refresh=refresh, backend=classic_backend
+        )
+        return [asdict(r) for r in records]
+
+    @tool
+    async def classic_send(
+        address: str, service: str, messages_hex: list[str], listen: float = 2.0
+    ) -> Record | Failure:
+        """send hex messages to a classic device's rfcomm channel and collect its answers.
+
+        refused unless the human armed this device by running `harald arm <address>`
+        in their own terminal. each message spends one armed write, a query included,
+        because classic has no read. all messages go over one connection, in order,
+        with `listen` seconds (at most 30) of listening after each, so handshakes and
+        acks can be sent as messages. service is an rfcomm service uuid or channel number from
+        classic_services; standard profiles and channels missing from
+        classic_services are refused, and firmware-update channels stay blocked.
+        received holds each chunk with the message number it followed (0 = before the
+        first), seconds since the channel opened and the value as hex. stopped
+        explains a budget that ran out partway, or a link that failed after the first
+        message; it is empty when every message was sent.
+        """
+        messages = _from_hex(messages_hex)
+        result = await classic.send(
+            address, service, messages, listen, backend=classic_backend
+        )
+        return {
+            "sent": result.sent,
+            "writes_left": result.writes_left,
+            "received": [
+                {
+                    "after": chunk.after,
+                    "seconds": round(chunk.seconds, 3),
+                    "value_hex": chunk.data.hex(),
+                }
+                for chunk in result.chunks
+            ],
+            "stopped": result.stopped,
+        }
+
+    @tool
+    async def classic_listen(
+        address: str, service: str, seconds: float
+    ) -> list[Record] | Failure:
+        """open a classic device's rfcomm channel, send nothing, and collect `seconds`
+        (at most 30) of what it says.
+
+        needs no arm, but standard profiles are still refused. service is an rfcomm
+        service uuid or channel number from classic_services. returns one entry per
+        chunk: seconds since the channel opened and the value as hex.
+        """
+        chunks = await classic.listen(
+            address, service, seconds, backend=classic_backend
+        )
+        return [
+            {"seconds": round(chunk.seconds, 3), "value_hex": chunk.data.hex()}
+            for chunk in chunks
+        ]
+
     return mcp
 
 
 def run() -> None:
-    """Serve harald's tools over stdio until the client disconnects."""
+    """Serve harald's tools over stdio until the client disconnects.
+
+    IOBluetooth calls back only on the main thread, so on a mac the server runs on a
+    background thread under `classic_mac.run_main` while the main thread pumps the
+    run loop for the classic tools.
+    """
+    if sys.platform == "darwin":
+        try:
+            from harald import classic_mac  # pyobjc is only imported on a mac
+        except ImportError:
+            pass
+        else:
+            classic_mac.run_main(lambda: build_server().run(transport="stdio"))
+            return
     build_server().run(transport="stdio")

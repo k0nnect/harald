@@ -1,0 +1,8 @@
+name = "WH-1000XM5"
+vendor = "Sony"
+status = "decoded"
+transport = "classic"
+key_scope = "none"
+service_uuids = ["956c7b26-d49a-4ba8-b03f-b17d393cb6e2"]
+name_hint = "WH-1000XM5"
+summary = "noise cancelling, ambient sound and battery over sony's rfcomm control protocol"

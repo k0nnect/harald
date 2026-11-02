@@ -1,22 +1,33 @@
 import os
 import struct
 
+import pytest
 from capture_helpers import (
+    CLASSIC_CONN,
     CONN,
     FFE1_HANDLE,
     PKLG_ACL_IN,
     PKLG_ACL_OUT,
     T0,
+    UIH,
     WRITE_CMD,
     acl,
     att,
     char_decls,
     l2cap,
+    make_btsnoop,
     make_pklg,
+    mixed_capture,
+    mixed_records,
     read_by_type_req,
+    rfcomm_frame,
+    rfcomm_out,
+    rfcomm_setup,
     write_capture,
 )
 
+from harald.capture.att import AttEvent
+from harald.capture.rfcomm import RfcommEvent
 from harald.capture.timeline import build_timeline, render
 
 NOTIFY, READ_REQ, READ_RSP, FIND_INFO_RSP = 0x1B, 0x0A, 0x0B, 0x05
@@ -281,3 +292,157 @@ def test_build_timeline_is_cached_by_path_and_mtime(tmp_path):
     os.utime(path, ns=(later, later))
     rebuilt = build_timeline(path)
     assert rebuilt is not first and len(rebuilt.events) == 2
+
+
+# bluetooth classic: rfcomm events share the timeline with att events.
+
+MIXED = """\
+#1  +0.000s  c=0x000b  phone->device  rfcomm_open  ch=9  -  -
+#2  +0.500s  c=0x0040  phone->device  write_cmd  h=0x0012  ffe1  01
+#3  +0.750s  c=0x000b  phone->device  rfcomm  ch=9  -  3e 0c 00
+#4  +1.000s  c=0x000b  phone->device  rfcomm_open  ch=2  -  -
+#5  +1.250s  c=0x000b  phone->device  rfcomm  ch=2  -  01
+#6  +1.500s  c=0x000b  device->phone  rfcomm  ch=9  -  3e 01
+#7  +1.750s  c=0x0040  device->phone  notify  h=0x0015  -  02
+#8  +2.000s  c=0x000b  phone->device  rfcomm_close  ch=9  -  -
+showing 1–8 of 8 events"""
+
+
+def _numbers(out: str) -> list[str]:
+    """The `#n` of each event line, skipping warnings and the footer."""
+    return [line.split("  ")[0] for line in out.splitlines() if line.startswith("#")]
+
+
+@pytest.mark.parametrize("fmt", ["pklg", "btsnoop"])
+def test_mixed_capture_orders_and_numbers_events(tmp_path, fmt):
+    if fmt == "pklg":
+        path = mixed_capture(tmp_path)
+    else:  # an android log of the same traffic
+        kinds = {PKLG_ACL_OUT: "acl_out", PKLG_ACL_IN: "acl_in"}
+        path = tmp_path / "btsnoop_hci.log"
+        path.write_bytes(make_btsnoop([(kinds[t], d) for t, d in mixed_records()]))
+    tl = build_timeline(path)
+    assert [type(e) for e in tl.events] == [
+        RfcommEvent,
+        AttEvent,
+        RfcommEvent,
+        RfcommEvent,
+        RfcommEvent,
+        RfcommEvent,
+        AttEvent,
+        RfcommEvent,
+    ]
+    assert [e.index for e in tl.events] == list(range(1, 9))
+    assert tl.warnings == []
+    assert render(tl) == MIXED
+
+
+# v0.1's exact output for the records in test_att_only_capture_renders_as_before
+ATT_ONLY = """\
+warning: no gatt discovery on connection c=0x0041: its handles are shown raw. toggle bluetooth off and on on the phone, then open the app, and capture again
+#1  +0.000s  c=0x0040  phone->device  write_cmd  h=0x0012  ffe1  7e 07 05
+#2  +0.250s  c=0x0040  phone->device  read_req  h=0x0012  ffe1  -
+#3  +0.500s  c=0x0040  device->phone  read_rsp  h=0x0012  ffe1  64
+#4  +0.750s  c=0x0040  device->phone  notify  h=0x0012  ffe1  01 02
+#5  +1.000s  c=0x0040  device->phone  write_req  h=0x0012  -  06
+#6  +1.250s  c=0x0041  phone->device  write_cmd  h=0x0012  -  02
+showing 1–6 of 6 events"""
+ATT_ONLY_PAGE = """\
+warning: no gatt discovery on connection c=0x0041: its handles are shown raw. toggle bluetooth off and on on the phone, then open the app, and capture again
+#2  +0.250s  c=0x0040  phone->device  read_req  h=0x0012  ffe1  -
+#3  +0.500s  c=0x0040  device->phone  read_rsp  h=0x0012  ffe1  64
+showing 2–3 of 5 events with c=0x0040 and h=0x0012"""
+
+
+def test_att_only_capture_renders_as_before(tmp_path):
+    # v0.1's records and its exact output: rfcomm decoding adds nothing to an le capture
+    records = _discovery() + [
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x7e\x07\x05")),
+        _out(att(READ_REQ, FFE1_HANDLE)),
+        _in(bytes([READ_RSP, 0x64])),
+        _in(att(NOTIFY, FFE1_HANDLE, b"\x01\x02")),
+        _in(att(WRITE_REQ, FFE1_HANDLE, b"\x06")),
+        _out(att(WRITE_CMD, FFE1_HANDLE, b"\x02"), conn=OTHER_CONN),
+    ]
+    tl = build_timeline(_capture(tmp_path, records))
+    assert render(tl) == ATT_ONLY
+    assert render(tl, conn=CONN, handle=FFE1_HANDLE, limit=2, offset=1) == ATT_ONLY_PAGE
+
+
+def test_att_only_capture_keeps_capture_order_when_the_clock_steps_back(tmp_path):
+    # v0.1 showed att events in capture order even when the phone's clock jumped back
+    # between records; merging in rfcomm must not re-sort them by time.
+    data = bytearray(make_pklg([_out(att(WRITE_CMD, FFE1_HANDLE, b"\x01"))] * 2))
+    second = 4 + struct.unpack_from(">I", data)[0]  # the second record's header
+    struct.pack_into(">I", data, second + 4, int(T0) - 60)  # a minute before the first
+    path = tmp_path / "records.pklg"
+    path.write_bytes(bytes(data))
+    tl = build_timeline(path)
+    assert [(e.index, e.ts) for e in tl.events] == [(1, T0), (2, T0 - 59.75)]
+
+
+def test_channel_filter(tmp_path):
+    tl = build_timeline(mixed_capture(tmp_path))
+    out = render(tl, channel=9)
+    assert _numbers(out) == ["#1", "#3", "#6", "#8"]
+    assert "ch=2" not in out and "write_cmd" not in out
+    assert out.splitlines()[-1] == "showing 1–4 of 4 events with ch=9"
+    paged = render(tl, channel=9, limit=2, offset=1).splitlines()
+    assert _numbers("\n".join(paged)) == ["#3", "#6"]
+    assert paged[-1] == "showing 2–3 of 4 events with ch=9"
+    both = render(tl, conn=CLASSIC_CONN, channel=2).splitlines()
+    assert both == [
+        "#4  +1.000s  c=0x000b  phone->device  rfcomm_open  ch=2  -  -",
+        "#5  +1.250s  c=0x000b  phone->device  rfcomm  ch=2  -  01",
+        "showing 1–2 of 2 events with c=0x000b and ch=2",
+    ]
+    assert (
+        render(tl, conn=CONN, channel=9)
+        == "showing 0 of 0 events with c=0x0040 and ch=9"
+    )
+
+
+def test_handle_filter_excludes_rfcomm(tmp_path):
+    # att handle 0x0009 and rfcomm channel 9 share a number; handle keeps only att
+    records = _discovery() + rfcomm_setup()
+    records += [rfcomm_out(rfcomm_frame(9, UIH, b"\xaa"))]
+    records += [_out(att(WRITE_CMD, 0x0009, b"\xbb"))]
+    tl = build_timeline(_capture(tmp_path, records))
+    assert tl.warnings == []
+    assert render(tl, handle=0x0009).splitlines() == [
+        "#2  +0.250s  c=0x0040  phone->device  write_cmd  h=0x0009  -  bb",
+        "showing 1–1 of 1 events with h=0x0009",
+    ]
+    assert render(tl, channel=9).splitlines() == [
+        "#1  +0.000s  c=0x000b  phone->device  rfcomm  ch=9  -  aa",
+        "showing 1–1 of 1 events with ch=9",
+    ]
+    out = render(tl, handle=0x0009, channel=9)
+    assert out == "showing 0 of 0 events with h=0x0009 and ch=9"
+
+
+def test_no_setup_and_iap2_warnings(tmp_path):
+    iap2 = bytes.fromhex("ff5a000e40")  # an iap2 link packet, as an iphone app sends
+    records = [
+        # rfcomm on a channel whose l2cap setup came before the capture started
+        (PKLG_ACL_OUT, acl(CLASSIC_CONN, l2cap(rfcomm_frame(4, UIH, b"\x01"), 0x0045))),
+        *rfcomm_setup(),
+        rfcomm_out(rfcomm_frame(9, UIH, iap2)),
+        rfcomm_out(rfcomm_frame(9, UIH, iap2, credit=1)),  # one warning per channel
+    ]
+    tl = build_timeline(_capture(tmp_path, records))
+    assert tl.warnings == [
+        (
+            "l2cap traffic on c=0x000b cid 0x0045 has no captured setup, so it is not "
+            "decoded. start the capture before opening the app"
+        ),
+        "rfcomm channel 9 on c=0x000b carries apple iap2; harald can't unwrap it yet",
+    ]
+    lines = render(tl).splitlines()
+    assert lines[:2] == [f"warning: {w}" for w in tl.warnings]
+    # the wrapped payloads still show, as plain rfcomm data
+    assert lines[2:] == [
+        "#1  +0.000s  c=0x000b  phone->device  rfcomm  ch=9  -  ff 5a 00 0e 40",
+        "#2  +0.250s  c=0x000b  phone->device  rfcomm  ch=9  -  ff 5a 00 0e 40",
+        "showing 1–2 of 2 events",
+    ]

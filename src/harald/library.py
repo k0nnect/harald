@@ -8,9 +8,9 @@ the repo root so it is visible on GitHub; the wheel force-includes it as
 Keys rule: an entry may carry a key only when `key_scope = "app-wide"` (identical
 on every unit, shipped in the vendor app). Per-unit and pairing keys never belong
 here, so `validate_meta` refuses any other entry that has `key_hex` set. It also
-refuses a `status`, `key_scope` or `cipher` outside the values below; `cipher` uses
-the drivers' names (`harald.analyze.MODES`), and `"none"` or leaving it out both mean
-there is none.
+refuses a `status`, `key_scope`, `cipher` or `transport` outside the values below;
+`cipher` uses the drivers' names (`harald.analyze.MODES`), and `"none"` or leaving it
+out both mean there is none. A missing `transport` means `"ble"`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from harald.errors import LibraryError
 
 KeyScope = Literal["app-wide", "none"]
 Status = Literal["decoded", "in progress", "wanted"]
+Transport = Literal["ble", "classic"]
 
 REQUIRED = ("name", "vendor", "status", "key_scope")
 _CIPHER_HINT = (
@@ -38,6 +39,7 @@ _CHOICES: dict[str, tuple[tuple[str, ...], str]] = {
     "status": (get_args(Status), "use decoded, in progress or wanted"),
     "key_scope": (get_args(KeyScope), "use app-wide, or none when there is no key"),
     "cipher": (MODES, _CIPHER_HINT),
+    "transport": (get_args(Transport), "use ble or classic"),
 }
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
@@ -53,6 +55,8 @@ class DeviceMeta:
     cipher: str | None
     service_uuids: list[str]
     summary: str
+    transport: Transport = "ble"
+    name_hint: str = ""
 
 
 def check_slug(slug: str) -> str:
@@ -73,7 +77,8 @@ def validate_meta(data: dict, slug: str) -> DeviceMeta:
     cipher = data.get("cipher") or None  # "none" or left out when there is none
     if cipher == "none":
         cipher = None
-    fields = {**data, "cipher": cipher}
+    transport = data.get("transport", "ble")  # entries from before classic are ble
+    fields = {**data, "cipher": cipher, "transport": transport}
     for field, (allowed, hint) in _CHOICES.items():
         value = fields[field]
         if value is not None and value not in allowed:
@@ -95,6 +100,8 @@ def validate_meta(data: dict, slug: str) -> DeviceMeta:
         cipher=cipher,
         service_uuids=list(data.get("service_uuids", [])),
         summary=data.get("summary", ""),
+        transport=transport,
+        name_hint=data.get("name_hint", ""),
     )
 
 

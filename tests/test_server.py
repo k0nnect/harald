@@ -1,18 +1,28 @@
 """The mcp server, driven through `MCPServer.call_tool` the way a client calls it."""
 
+import asyncio
+import sys
 import zipfile
 
 import pytest
 from bleak.exc import BleakError
-from capture_helpers import write_capture
+from capture_helpers import mixed_capture, write_capture
+from classic_fakes import XM5_ADDRESS, FakeBackend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fakes import CHR, SVC, FakeChar, FakeClient, FakeScanner, FakeService
 
+import harald
+from harald import server as server_module
 from harald.apk import ApkReport, Candidate
-from harald.arm import arm
-from harald.server import EXPECTED_TOOLS, build_server
+from harald.arm import arm, live_grant
+from harald.classic import ClassicDevice
+from harald.server import EXPECTED_TOOLS, INSTRUCTIONS, build_server
 
 ADDR = "AA-11"
+HPC = "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"  # an xm5 vendor channel, 9
+M1 = bytes.fromhex("3e0c00000000020000103c")
+ACK = bytes.fromhex("3e010100000000023c")
+HELLO = bytes.fromhex("3e0c000000000801000300201600004f3c")
 
 
 async def call(server, name, **arguments):
@@ -40,6 +50,10 @@ async def test_tools_registered():
         "load_device",
         "read_notes",
         "save_note",
+        "classic_devices",
+        "classic_services",
+        "classic_send",
+        "classic_listen",
     }
     assert {"arm", "disarm", "write_enable"}.isdisjoint(names)
 
@@ -111,6 +125,22 @@ async def test_open_capture_filters_by_connection(tmp_path):
     assert out.endswith("showing 1–2 of 2 events with c=0x0040")
     other = await call(server, "open_capture", path=str(path), conn=0x0041)
     assert other == "showing 0 of 0 events with c=0x0041"
+
+
+async def test_open_capture_filters_by_rfcomm_channel(tmp_path):
+    server = build_server()
+    out = await call(
+        server, "open_capture", path=str(mixed_capture(tmp_path)), channel=9
+    )
+    lines = out.splitlines()
+    assert [line.split("  ")[0] for line in lines[:-1]] == ["#1", "#3", "#6", "#8"]
+    assert lines[1] == "#3  +0.750s  c=0x000b  phone->device  rfcomm  ch=9  -  3e 0c 00"
+    assert lines[-1] == "showing 1–4 of 4 events with ch=9"
+    [tool] = [t for t in await server.list_tools() if t.name == "open_capture"]
+    assert "channel" in tool.input_schema["properties"]
+    doc = " ".join(tool.description.split())
+    for words in ("rfcomm", "channel", "btsnoop", "iap2"):
+        assert words in doc
 
 
 async def test_missing_capture_returns_error(tmp_path):
@@ -234,3 +264,235 @@ async def test_analyze_apk_returns_the_totals(tmp_path, monkeypatch):
         }
     ]
     assert result["jadx_dir"] == str(tmp_path / "jadx")
+
+
+async def test_instructions_mention_classic_and_no_arm_tool():
+    assert "bluetooth le or classic (rfcomm) protocol" in INSTRUCTIONS
+    assert "write_char and classic_send are refused" in INSTRUCTIONS
+    assert "harald arm <address>" in INSTRUCTIONS
+    assert "no tool can arm" in INSTRUCTIONS
+    assert 'returns {"error": ..., "hint": ...}: act on the hint' in INSTRUCTIONS
+    tools = {tool.name: tool for tool in await build_server().list_tools()}
+    send_doc = " ".join(tools["classic_send"].description.split())
+    for phrase in (
+        "harald arm <address>",
+        "each message spends one armed write, a query included",
+        "classic has no read",
+        "one connection, in order",
+        "handshakes and acks",
+        "classic_services",
+        "firmware-update channels stay blocked",
+        "0 = before the first",
+        "stopped",
+    ):
+        assert phrase in send_doc
+    assert send_doc == send_doc.lower()
+
+
+async def test_classic_devices_shape():
+    backend = FakeBackend(devices=[ClassicDevice(XM5_ADDRESS, "WH-1000XM5", True)])
+    server = build_server(classic_backend=backend)
+    assert await call(server, "classic_devices") == [
+        {"address": XM5_ADDRESS, "name": "WH-1000XM5", "connected": True}
+    ]
+
+
+async def test_classic_services_shape():
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    records = await call(server, "classic_services", address=XM5_ADDRESS)
+    assert records[0] == {
+        "name": "Hands-Free unit",
+        "uuids": ["0000111e-0000-1000-8000-00805f9b34fb"],
+        "channel": 1,
+        "protected": True,
+        "firmware_update": False,
+    }
+    hpc = next(r for r in records if r["channel"] == 9)
+    assert hpc["protected"] is False
+    await call(server, "classic_services", address=XM5_ADDRESS, refresh=True)
+    assert backend.asked == [(XM5_ADDRESS, False), (XM5_ADDRESS, True)]
+
+
+async def test_classic_send_unarmed_is_a_failure_dict():
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    result = await call(
+        server,
+        "classic_send",
+        address=XM5_ADDRESS,
+        service="9",
+        messages_hex=[M1.hex()],
+    )
+    assert result == {
+        "error": "writes to aa:bb:cc:11:22:33 are locked",
+        "hint": "ask the human to run: harald arm aa:bb:cc:11:22:33 --writes 50 --minutes 30",
+    }
+    assert backend.opened == []
+
+
+async def test_classic_send_shape():
+    arm(XM5_ADDRESS, writes=5)
+    backend = FakeBackend(replies={M1: [ACK]})
+    server = build_server(classic_backend=backend)
+    result = await call(
+        server,
+        "classic_send",
+        address=XM5_ADDRESS,
+        service=HPC,
+        messages_hex=[M1.hex()],
+        listen=0.5,
+    )
+    assert set(result) == {"sent", "writes_left", "received", "stopped"}
+    assert result["sent"] == 1
+    assert result["writes_left"] == 4
+    assert result["stopped"] == ""
+    [chunk] = result["received"]
+    assert set(chunk) == {"after", "seconds", "value_hex"}
+    assert chunk["after"] == 1
+    assert chunk["value_hex"] == ACK.hex()
+    assert chunk["seconds"] == round(chunk["seconds"], 3)
+    assert backend.writes == [M1]
+    assert backend.channel.drains == [0.0, 0.5]
+    assert live_grant(XM5_ADDRESS).writes_left == 4
+
+
+async def test_classic_send_bad_hex_is_a_failure_dict():
+    arm(XM5_ADDRESS, writes=5)
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    result = await call(
+        server, "classic_send", address=XM5_ADDRESS, service="9", messages_hex=["zz"]
+    )
+    assert result["error"] and result["hint"] == ""
+    assert backend.opened == []
+    assert live_grant(XM5_ADDRESS).writes_left == 5
+
+
+async def test_classic_send_empty_message_is_a_failure_dict():
+    # "" is valid hex for no bytes at all: refused before a write is spent
+    arm(XM5_ADDRESS, writes=5)
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    result = await call(
+        server,
+        "classic_send",
+        address=XM5_ADDRESS,
+        service="9",
+        messages_hex=[M1.hex(), ""],
+    )
+    assert result == {
+        "error": "empty message",
+        "hint": "each message needs at least one byte of hex",
+    }
+    assert backend.opened == []
+    assert backend.writes == []
+    assert live_grant(XM5_ADDRESS).writes_left == 5
+
+
+async def test_classic_listening_over_30_seconds_is_a_failure_dict():
+    arm(XM5_ADDRESS, writes=5)
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    sent = await call(
+        server,
+        "classic_send",
+        address=XM5_ADDRESS,
+        service="9",
+        messages_hex=[M1.hex()],
+        listen=31,
+    )
+    heard = await call(
+        server, "classic_listen", address=XM5_ADDRESS, service="9", seconds=31
+    )
+    assert sent["error"] == "listen must be from 0 to 30 s, got 31"
+    assert heard["error"] == "seconds must be from 0 to 30 s, got 31"
+    assert backend.opened == []
+    assert live_grant(XM5_ADDRESS).writes_left == 5
+
+
+async def test_classic_listen_shape():
+    backend = FakeBackend(on_open=[HELLO])
+    server = build_server(classic_backend=backend)
+    chunks = await call(
+        server, "classic_listen", address=XM5_ADDRESS, service="9", seconds=0.5
+    )
+    assert [set(c) for c in chunks] == [{"seconds", "value_hex"}]
+    assert chunks[0]["value_hex"] == HELLO.hex()
+    assert backend.channel.drains == [0.5]
+
+
+async def test_classic_listen_protected_is_a_failure_dict():
+    backend = FakeBackend()
+    server = build_server(classic_backend=backend)
+    result = await call(
+        server, "classic_listen", address=XM5_ADDRESS, service="1", seconds=1.0
+    )
+    assert result["error"] == "channel 1 on aa:bb:cc:11:22:33 is a standard profile"
+    assert "harald classic services aa:bb:cc:11:22:33" in result["hint"]
+    assert backend.opened == []
+
+
+class StandInServer:
+    def __init__(self, ran):
+        self.ran = ran
+
+    def run(self, transport):
+        self.ran.append(("serve", transport))
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("darwin", [("run_main", "enter"), ("serve", "stdio"), ("run_main", "exit")]),
+        ("linux", [("serve", "stdio")]),
+    ],
+)
+def test_run_serves_under_run_main_only_on_darwin(monkeypatch, platform, expected):
+    ran = []
+
+    def run_main(fn):
+        ran.append(("run_main", "enter"))
+        result = fn()
+        ran.append(("run_main", "exit"))
+        return result
+
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr("harald.classic_mac.run_main", run_main)
+    monkeypatch.setattr(server_module, "build_server", lambda: StandInServer(ran))
+    server_module.run()
+    assert ran == expected
+
+
+def test_run_serves_directly_when_the_mac_backend_cannot_load(monkeypatch):
+    ran = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    # if the import below were not blocked, run_main would show up in `ran`
+    monkeypatch.setattr(
+        "harald.classic_mac.run_main", lambda fn: ran.append(("run_main", fn))
+    )
+    # `from harald import classic_mac` takes the package attribute when it is
+    # there, so block both the attribute and the module entry
+    monkeypatch.delattr(harald, "classic_mac", raising=False)
+    monkeypatch.setitem(sys.modules, "harald.classic_mac", None)
+    monkeypatch.setattr(server_module, "build_server", lambda: StandInServer(ran))
+    server_module.run()
+    assert ran == [("serve", "stdio")]
+
+
+def test_ble_tools_answer_under_the_real_run_main():
+    # `harald mcp` serves under run_main on a mac, so every tool runs off the main
+    # thread; the fakes stand in for the radio, and run_main only pumps the run loop
+    pytest.importorskip("IOBluetooth")
+    from harald.classic_mac import run_main
+
+    async def session():
+        server = build_server(scanner_cls=FakeScanner, client_cls=FakeClient)
+        devices = await call(server, "scan", timeout=0.1)
+        value = await call(server, "read_char", address=ADDR, char_uuid=CHR)
+        return devices, value
+
+    FakeClient.reset(reads={CHR: b"\x0a\x0b"})
+    devices, value = run_main(lambda: asyncio.run(session()))
+    assert [d["address"] for d in devices] == ["BB-22", "AA-11", "CC-33"]
+    assert value == "0a0b"

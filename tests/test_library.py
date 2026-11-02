@@ -62,6 +62,7 @@ def test_per_unit_key_rejected(tmp_path):
         ('cipher = "None"', "unknown cipher: 'None'", "leave cipher out"),
         ('status = "done"', "unknown status: 'done'", "in progress"),
         ('key_scope = "per-unit"', "unknown key_scope: 'per-unit'", "app-wide"),
+        ('transport = "usb"', "unknown transport: 'usb'", "use ble or classic"),
     ],
 )
 def test_fields_with_fixed_values_are_checked(tmp_path, line, message, hint):
@@ -98,6 +99,24 @@ def test_cipher_none_is_the_same_as_leaving_it_out(tmp_path):
     meta = load_device("lamp", root=tmp_path)
     assert meta.cipher is None
     assert meta == replace(load_device("bare", root=tmp_path), slug="lamp")
+
+
+def test_missing_transport_means_ble(root):
+    meta = load_device("demo-lamp", root=root)
+    assert meta.transport == "ble"
+    assert meta.name_hint == ""
+
+
+def test_classic_transport_and_name_hint_load(tmp_path):
+    write_entry(
+        tmp_path,
+        "headset",
+        'name = "headset"\nvendor = "x"\nstatus = "wanted"\nkey_scope = "none"\n'
+        'transport = "classic"\nname_hint = "acme hs"\n',
+    )
+    meta = load_device("headset", root=tmp_path)
+    assert meta.transport == "classic"
+    assert meta.name_hint == "acme hs"
 
 
 def test_wanted_device_without_key_ok(root):

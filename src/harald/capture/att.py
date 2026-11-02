@@ -1,33 +1,19 @@
 """Decode att traffic out of hci acl records: writes, notifications, indications, reads.
 
-acl fragments are reassembled into l2cap frames per connection and direction, and only
-the att channel (cid 0x0004) is kept. Each connection gets its own handle-to-uuid map,
-from the gatt discovery the phone ran against that device, when the capture caught
-it: a capture can hold several connections, and their handles mean different things.
+`l2cap_frames` reassembles the acl fragments, and only the att channel (cid 0x0004) is
+kept. Each connection gets its own handle-to-uuid map, from the gatt discovery the
+phone ran against that device, when the capture caught it: a capture can hold several
+connections, and their handles mean different things.
 """
 
 from __future__ import annotations
 
-import struct
-from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal
 from uuid import UUID
 
 from harald.capture.files import HciRecord
+from harald.capture.l2cap import DIRECTION, OTHER_SIDE, Direction, l2cap_frames
 
-Direction = Literal["phone->device", "device->phone"]
-
-_DIRECTION: dict[str, Direction] = {
-    "acl_out": "phone->device",
-    "acl_in": "device->phone",
-}
-_OTHER_SIDE = {"acl_out": "acl_in", "acl_in": "acl_out"}
-
-# acl: u16 handle (low 12 bits) + packet boundary flag (bits 12-13), u16 data length.
-# l2cap: u16 payload length, u16 channel id. both little-endian.
-_HEADER = struct.Struct("<HH")
-_PB_CONTINUATION = 0b01
 _ATT_CID = 0x0004
 
 _FIND_INFO_RSP = 0x05
@@ -93,7 +79,10 @@ def decode_att(
     last_read: dict[tuple[int, str], int] = {}  # (conn, requesting side) -> handle
     # conn -> whether the phone's last read-by-type request asked for 0x2803
     wants_chars: dict[int, bool] = {}
-    for ts, kind, conn, pdu in _att_pdus(records):
+    for frame in l2cap_frames(records):
+        if frame.cid != _ATT_CID or not frame.payload:
+            continue
+        ts, kind, conn, pdu = frame.ts, frame.kind, frame.conn, frame.payload
         op = pdu[0]
         if op == _READ_BY_TYPE_REQ and kind == "acl_out":
             wants_chars[conn] = _uuid(pdu[5:]) == _CHAR_DECL_TYPE
@@ -108,13 +97,13 @@ def decode_att(
                 last_read[(conn, kind)] = handle
             op_name, value = _HANDLE_OPS[op], pdu[3:]
             events.append(
-                AttEvent(0, ts, _DIRECTION[kind], op_name, conn, handle, None, value)
+                AttEvent(0, ts, DIRECTION[kind], op_name, conn, handle, None, value)
             )
         elif op == _READ_RSP:
-            handle = last_read.pop((conn, _OTHER_SIDE[kind]), None)
+            handle = last_read.pop((conn, OTHER_SIDE[kind]), None)
             value = pdu[1:]
             events.append(
-                AttEvent(0, ts, _DIRECTION[kind], "read_rsp", conn, handle, None, value)
+                AttEvent(0, ts, DIRECTION[kind], "read_rsp", conn, handle, None, value)
             )
     handle_maps = {conn: found for conn, found in handle_maps.items() if found}
     # numbered and labelled last, so discovery seen after an event still names it.
@@ -123,43 +112,6 @@ def decode_att(
         if event.handle is not None and event.addresses_device():
             event.uuid = handle_maps.get(event.conn, {}).get(event.handle)
     return events, handle_maps
-
-
-def _att_pdus(records: list[HciRecord]) -> Iterator[tuple[float, str, int, bytes]]:
-    """Yield (ts, kind, conn, pdu) for each complete att pdu, stamped at its last fragment.
-
-    The last fragment is when the pdu was complete, so events keep their time order.
-    Fragments are joined per (conn, direction). A record shorter than its acl header
-    claims (a snaplen cut) is skipped and drops that stream's partial frame, so later
-    fragments can't be glued onto the wrong bytes.
-    """
-    partial: dict[tuple[int, str], bytearray] = {}
-    for record in records:
-        if record.kind not in _DIRECTION or len(record.data) < _HEADER.size:
-            continue
-        flags_handle, length = _HEADER.unpack_from(record.data)
-        conn = flags_handle & 0x0FFF
-        key = (conn, record.kind)
-        body = record.data[_HEADER.size : _HEADER.size + length]
-        if len(body) < length:
-            partial.pop(key, None)
-            continue
-        if (flags_handle >> 12) & 0b11 == _PB_CONTINUATION:
-            if key not in partial:
-                continue  # the frame's start was not captured
-            partial[key].extend(body)
-        else:
-            partial[key] = bytearray(body)
-        frame = partial[key]
-        if len(frame) < _HEADER.size:
-            continue
-        size, cid = _HEADER.unpack_from(frame)
-        if len(frame) < _HEADER.size + size:
-            continue
-        del partial[key]
-        pdu = bytes(frame[_HEADER.size : _HEADER.size + size])
-        if cid == _ATT_CID and pdu:
-            yield record.ts, record.kind, conn, pdu
 
 
 def _uuid(raw: bytes) -> str | None:

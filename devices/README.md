@@ -1,11 +1,13 @@
 # devices
 
-the harald device library: gadgets whose bluetooth le protocol has been worked out.
-it ships inside the wheel as `harald/devices/`.
+the harald device library: bluetooth le and classic gadgets whose protocol has been
+worked out. it ships inside the wheel as `harald/devices/`.
 
 one entry per `devices/<slug>/`:
 
-- `device.toml` - name, vendor, status (`decoded`, `in progress`, `wanted`), key scope, service uuids, summary
+- `device.toml` - name, vendor, status (`decoded`, `in progress`, `wanted`), key scope, service uuids, summary,
+  transport (`ble` or `classic`; leave it out for `ble`), and an optional `name_hint`, the
+  start of the name the gadget shows, for finding it without an address
 - `protocol.md` - the protocol, written up
 - `driver.py` - a standalone driver, run with `harald drive <slug> ...`
 

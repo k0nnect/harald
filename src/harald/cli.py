@@ -8,8 +8,11 @@ command or write any file on the machine. Expected failures print
 `error: <message>` and `  hint: <hint>` to stderr and exit with code 2, never a
 traceback.
 
-The ble backends (`scanner_cls`, `client_cls`) and the driver runner (`runner`) are
+The ble backends (`scanner_cls`, `client_cls`), the classic backend
+(`classic_backend`; None means the mac's) and the driver runner (`runner`) are
 module-level hooks so tests can swap in fakes; they are looked up on every call.
+IOBluetooth calls back only on the main thread, so on a mac each `harald classic`
+command runs its asyncio work under `classic_mac.run_main`.
 """
 
 from __future__ import annotations
@@ -22,13 +25,13 @@ import subprocess
 import sys
 import time
 import zipfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from bleak.exc import BleakError
 
-from harald import __version__, arm, ble, library, workspace
+from harald import __version__, arm, ble, classic, library, workspace
 from harald.apk import analyze_apk
 from harald.capture.timeline import build_timeline, render
 from harald.errors import HaraldError, LibraryError
@@ -37,6 +40,9 @@ from harald.playbook import install_playbook
 scanner_cls = ble.BleakScanner
 client_cls = ble.BleakClient
 runner = subprocess.run
+classic_backend: classic.Backend | None = None
+
+T = TypeVar("T")
 
 # HaraldError carries its own hint; the rest are what the core modules let through
 # for missing paths, malformed input (bad hex, toml, zip) and unmapped radio failures.
@@ -115,7 +121,7 @@ def _arm(args: argparse.Namespace) -> int:
             "an agent should ask the human to run it",
         )
     print(
-        f"this lets harald write to {args.device}: "
+        f"this lets harald write to {arm.device_key(args.device)}: "
         f"up to {args.writes} writes in the next {args.minutes} min"
     )
     if args.allow_dfu:
@@ -186,6 +192,87 @@ def _write(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_classic(work: Callable[[], Coroutine[Any, Any, T]]) -> T:
+    """Run a classic command's asyncio work: under `classic_mac.run_main` on a mac,
+    since IOBluetooth calls back only on the main thread, and directly elsewhere."""
+    if sys.platform == "darwin":
+        try:
+            from harald import classic_mac  # pyobjc is only imported on a mac
+        except ImportError:
+            pass
+        else:
+            return classic_mac.run_main(lambda: asyncio.run(work()))
+    return asyncio.run(work())
+
+
+def _classic_devices(args: argparse.Namespace) -> int:
+    devices = _run_classic(lambda: classic.paired_devices(backend=classic_backend))
+    if not devices:
+        print("no paired classic devices; pair one in system settings > bluetooth")
+        return 0
+    width = max(len("address"), *(len(d.address) for d in devices))
+    print(f"{'address':<{width}}  connected  name")
+    for d in devices:
+        connected = "yes" if d.connected else "no"
+        print(f"{d.address:<{width}}  {connected:<9}  {d.name or '-'}")
+    return 0
+
+
+def _classic_services(args: argparse.Namespace) -> int:
+    address = classic.normalize_address(args.address)
+    records = _run_classic(
+        lambda: classic.services(address, refresh=args.refresh, backend=classic_backend)
+    )
+    if not records:
+        retry = f"; run: harald classic services {address} --refresh"
+        print(f"no service records for {address}{'' if args.refresh else retry}")
+        return 0
+    for r in records:
+        channel = "ch=-" if r.channel is None else f"ch={r.channel}"
+        flags = ("  protected" if r.protected else "") + (
+            "  firmware update" if r.firmware_update else ""
+        )
+        uuids = ",".join(r.uuids) or "-"
+        print(f"{channel:<5}  {uuids}  {r.name or '-'}{flags}")
+    return 0
+
+
+def _classic_send(args: argparse.Namespace) -> int:
+    # argparse has already turned every message into bytes, so bad hex never gets here
+    result = _run_classic(
+        lambda: classic.send(
+            args.address, args.service, args.hex, args.listen, backend=classic_backend
+        )
+    )
+    for chunk in result.chunks:
+        print(f"after #{chunk.after}  {_chunk_line(chunk)}")
+    noun = "message" if result.sent == 1 else "messages"
+    print(f"sent {result.sent} {noun}; writes left: {result.writes_left}")
+    if result.stopped:
+        # a partial send: 1, so a script can tell it from a whole one (0) and
+        # from an error that sent nothing (2)
+        print(f"stopped: {result.stopped}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _classic_listen(args: argparse.Namespace) -> int:
+    chunks = _run_classic(
+        lambda: classic.listen(
+            args.address, args.service, args.seconds, backend=classic_backend
+        )
+    )
+    if not chunks:
+        print(f"nothing received in {args.seconds:g}s")
+    for chunk in chunks:
+        print(_chunk_line(chunk))
+    return 0
+
+
+def _chunk_line(chunk: classic.Chunk) -> str:
+    return f"+{chunk.seconds:.3f}s  {chunk.data.hex(' ')}"
+
+
 def _capture_open(args: argparse.Namespace) -> int:
     timeline = build_timeline(Path(args.path))
     # render puts the timeline's warnings first; they are not printed again here.
@@ -196,6 +283,7 @@ def _capture_open(args: argparse.Namespace) -> int:
             offset=args.offset,
             handle=args.handle,
             conn=args.conn,
+            channel=args.channel,
         )
     )
     return 0
@@ -229,10 +317,10 @@ def _devices(args: argparse.Namespace) -> int:
         print("the device library is empty")
         return 0
     width = max(len("slug"), *(len(m.slug) for m in metas))
-    print(f"{'slug':<{width}}  {'status':<11}  name")
+    print(f"{'slug':<{width}}  {'status':<11}  {'transport':<9}  name")
     for m in metas:
         summary = f"  {m.summary}" if m.summary else ""
-        print(f"{m.slug:<{width}}  {m.status:<11}  {m.name}{summary}")
+        print(f"{m.slug:<{width}}  {m.status:<11}  {m.transport:<9}  {m.name}{summary}")
     return 0
 
 
@@ -244,10 +332,12 @@ def _device(args: argparse.Namespace) -> int:
         ("name", meta.name),
         ("vendor", meta.vendor),
         ("status", meta.status),
+        ("transport", meta.transport),
         ("key scope", meta.key_scope),
         ("key", meta.key_hex),
         ("cipher", meta.cipher),
         ("services", ", ".join(meta.service_uuids)),
+        ("name hint", meta.name_hint),
         ("summary", meta.summary),
         ("protocol", protocol if protocol.is_file() else None),
         ("driver", driver if driver.is_file() else None),
@@ -321,16 +411,45 @@ def _number(text: str) -> int:
         ) from None
 
 
+def _hex_message(text: str) -> bytes:
+    try:
+        data = bytes.fromhex(text)
+    except ValueError:
+        data = b""
+    if not data:
+        raise argparse.ArgumentTypeError(
+            f"must be hex bytes such as 3e010000000000013c, got {text!r}"
+        )
+    return data
+
+
+def _seconds(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value >= 0):
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds, 0 or more, got {text!r}"
+        )
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="harald",
-        description="work out the bluetooth le protocol of gadgets you own",
+        description="work out the bluetooth le and classic protocol of gadgets you own",
     )
     parser.add_argument("--version", action="version", version=f"harald {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
-    def command(name: str, func: Callable[[argparse.Namespace], int], summary: str):
-        cmd = sub.add_parser(name, help=summary, description=summary)
+    def command(
+        name: str,
+        func: Callable[[argparse.Namespace], int],
+        summary: str,
+        group: Any = sub,
+    ):
+        cmd = group.add_parser(name, help=summary, description=summary)
         cmd.set_defaults(func=func)
         return cmd
 
@@ -344,7 +463,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     arm_cmd = command("arm", _arm, "allow writes to one device for a limited time")
-    arm_cmd.add_argument("device", help="the device address, as harald scan shows it")
+    arm_cmd.add_argument(
+        "device",
+        help="the device address, as harald scan or harald classic devices shows it",
+    )
     arm_cmd.add_argument(
         "--writes",
         type=_positive_int,
@@ -391,14 +513,78 @@ def _build_parser() -> argparse.ArgumentParser:
         "writes without response when the characteristic allows that",
     )
 
+    classic_cmd = sub.add_parser(
+        "classic", help="talk to paired bluetooth classic (rfcomm) devices"
+    )
+    classic_sub = classic_cmd.add_subparsers(
+        dest="classic_command", required=True, metavar="<command>"
+    )
+    service_help = (
+        "an rfcomm service uuid or channel number from harald classic services"
+    )
+    command(
+        "devices",
+        _classic_devices,
+        "list the bluetooth classic devices paired with this mac",
+        classic_sub,
+    )
+    services = command(
+        "services",
+        _classic_services,
+        "list a paired classic device's rfcomm service records",
+        classic_sub,
+    )
+    services.add_argument("address")
+    services.add_argument(
+        "--refresh",
+        action="store_true",
+        help="ask the device again instead of trusting the mac's cache",
+    )
+    send = command(
+        "send",
+        _classic_send,
+        "send hex messages to an rfcomm channel and show what comes back (needs arm)",
+        classic_sub,
+    )
+    send.add_argument("address")
+    send.add_argument("service", help=service_help)
+    send.add_argument(
+        "hex",
+        nargs="+",
+        type=_hex_message,
+        help="the messages, sent in order, e.g. 3e010000000000013c",
+    )
+    send.add_argument(
+        "--listen",
+        type=_seconds,
+        default=2.0,
+        metavar="s",
+        help="seconds to listen after each message (default 2, at most 30)",
+    )
+    listen = command(
+        "listen",
+        _classic_listen,
+        "show what an rfcomm channel says, sending nothing",
+        classic_sub,
+    )
+    listen.add_argument("address")
+    listen.add_argument("service", help=service_help)
+    listen.add_argument(
+        "--seconds",
+        type=_seconds,
+        default=5.0,
+        metavar="s",
+        help="how long to listen (default 5, at most 30)",
+    )
+
     capture = sub.add_parser("capture", help="read phone captures")
     capture_sub = capture.add_subparsers(
         dest="capture_command", required=True, metavar="<command>"
     )
     opened = capture_sub.add_parser(
         "open",
-        help="show the att timeline of a .pklg or btsnoop capture",
-        description="show the att timeline of a .pklg or btsnoop capture",
+        help="show the att and rfcomm timeline of a .pklg or btsnoop capture",
+        description="show the att and rfcomm timeline of a .pklg or btsnoop capture",
     )
     opened.set_defaults(func=_capture_open)
     opened.add_argument("path")
@@ -423,6 +609,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_number,
         metavar="c",
         help="only events on this acl connection, e.g. 0x0040",
+    )
+    opened.add_argument(
+        "--channel",
+        type=_number,
+        metavar="n",
+        help="only rfcomm events on this channel, e.g. 9",
     )
 
     apk = command("apk", _apk, "statically analyze a vendor android app on disk")

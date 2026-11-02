@@ -4,12 +4,17 @@ import re
 import tomllib
 from pathlib import Path
 
-from harald.library import validate_meta
+from harald.arm import normalize_uuid
+from harald.classic import PROTECTED_CLASSES
+from harald.cli import _build_parser
+from harald.library import list_devices, load_device, validate_meta
 
 REPO = Path(__file__).resolve().parents[1]
 README = REPO / "README.md"
 CONTRIBUTING = REPO / "CONTRIBUTING.md"
 BANNER = REPO / "assets" / "banner.svg"
+LIBRARY = REPO / "devices"
+PYPROJECT = REPO / "pyproject.toml"
 
 # emoji blocks: misc technical, misc symbols and dingbats, arrows and shapes,
 # the emoji variation selector, the zero-width joiner, and everything from mahjong
@@ -27,9 +32,11 @@ SECTIONS = (
     "二 install",
     "三 devices",
     "四 agent setup",
-    "五 safety",
-    "六 contributing a device",
+    "五 bluetooth classic",
+    "六 safety",
+    "七 contributing a device",
 )
+CLASSIC, SAFETY = SECTIONS[4], SECTIONS[5]
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 # an html <img src="..."> or a markdown ![alt](src)
 IMAGE_SRC = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"|!\[[^\]]*\]\(([^)\s]+)\)')
@@ -37,6 +44,28 @@ RAW_ASSETS = "https://raw.githubusercontent.com/k0nnect/harald/main/assets/"
 # an html <a href="..."> or a markdown [text](target) that is not an image
 LINK = re.compile(r'<a\b[^>]*\bhref="([^"]+)"|(?<!!)\[[^\]]*\]\(([^)\s]+)\)')
 REPO_URL = "https://github.com/k0nnect/harald/"
+# the shields badge in the header, its alt text and its url both carry the count
+BADGE = re.compile(
+    r'<img alt="devices: (\d+) decoded" '
+    r'src="https://img\.shields\.io/badge/devices-(\d+)%20decoded-'
+)
+XM5_ROW = (
+    "| sony wh-1000xm5 headphones | noise cancelling, ambient and battery over "
+    "bluetooth classic | {status} |"
+)
+# the safety section's names for the protected classic profiles, by assigned number
+PROTECTED_NAMES = {
+    "hands-free": ("111e", "111f"),
+    "headset": ("1108", "1112", "1131"),
+    "dial-up networking": ("1103",),
+    "obex object push": ("1105",),
+    "file transfer": ("1106",),
+    "phonebook": ("112f", "1130"),
+    "messages": ("1132", "1133", "1134"),
+    "sim access": ("112d",),
+    "apple iap2": (),
+}
+IAP2 = "00000000-deca-fade-deca-deafdecacaff"
 
 
 def _prose(path: Path) -> str:
@@ -131,7 +160,7 @@ def test_speak_promises_script_not_home_assistant():
 
 
 def test_safety_says_what_the_arm_gate_stops_and_what_it_cannot():
-    safety = _section(README.read_text(encoding="utf-8"), SECTIONS[4])
+    safety = _section(README.read_text(encoding="utf-8"), SAFETY)
     section = " ".join(safety.split())
     assert "type `arm`" in section  # harald arm asks the person at the terminal
     assert "there is no mcp tool that arms" in section
@@ -143,6 +172,11 @@ def test_safety_says_what_the_arm_gate_stops_and_what_it_cannot():
         "could get around"
     ) in section
     assert "the playbook's rule" in section
+    # the same commands the playbook keeps out of the agent's shell
+    assert (
+        "never runs `harald arm`, `harald write`, `harald drive`, "
+        "`harald classic send` or a driver from its own shell"
+    ) in section
     for overstated in ("can never approve", "can't be piped"):
         assert overstated not in section
 
@@ -155,13 +189,97 @@ def test_contributing_states_keys_rule():
 
 
 def test_contributing_example_entry_is_valid():
+    # one bluetooth le example with a cipher, one bluetooth classic example
     text = CONTRIBUTING.read_text(encoding="utf-8")
-    block = next(b for b in FENCE.findall(text) if b.startswith("```toml\n"))
-    data = tomllib.loads("\n".join(block.splitlines()[1:-1]))
-    assert validate_meta(data, "demo-lamp").cipher == "aes-ecb"
+    blocks = [b for b in FENCE.findall(text) if b.startswith("```toml\n")]
+    entries = [
+        validate_meta(tomllib.loads("\n".join(block.splitlines()[1:-1])), slug)
+        for block, slug in zip(blocks, ("demo-lamp", "demo-speaker"), strict=True)
+    ]
+    lamp, speaker = entries
+    assert lamp.cipher == "aes-ecb"
+    assert lamp.transport == "ble"
+    assert speaker.transport == "classic"
+    assert speaker.service_uuids and speaker.name_hint
 
 
 def test_contributing_names_the_driver_constants():
     text = CONTRIBUTING.read_text(encoding="utf-8")
     assert "`ADDRESS_HINT`" in text and "`NAME_HINT`" in text
     assert "address_hint" not in text  # the spec field, not what driver.py holds
+
+
+def test_badge_counts_decoded_library_entries():
+    decoded = sum(m.status == "decoded" for m in list_devices(root=LIBRARY))
+    badges = BADGE.findall(README.read_text(encoding="utf-8"))
+    assert badges == [(str(decoded), str(decoded))]
+
+
+def test_devices_table_matches_library_status():
+    status = load_device("wh-1000xm5", root=LIBRARY).status
+    section = _section(_prose(README), SECTIONS[2])
+    rows = [line for line in section.splitlines() if "wh-1000xm5" in line]
+    assert rows == [XM5_ROW.format(status=status)]
+
+
+def test_readme_has_classic_section():
+    section = " ".join(_section(README.read_text(encoding="utf-8"), CLASSIC).split())
+    for phrase in (
+        "bluetooth classic",
+        "mac only",
+        "system settings > bluetooth",
+        "harald classic devices",
+        "harald classic services",
+        "harald classic send",
+        "harald classic listen",
+        "btsnoop",
+        "iap2",
+    ):
+        assert phrase in section, phrase
+
+
+def test_safety_covers_the_classic_gates():
+    section = " ".join(_section(README.read_text(encoding="utf-8"), SAFETY).split())
+    assert "every message spends one write" in section
+    assert "missing from" in section  # channels the device does not list
+    assert "need no arming" in section  # library drivers
+    # the protected profiles: the readme's names cover harald.classic.PROTECTED_CLASSES,
+    # no more and no less
+    shorts = [short for numbers in PROTECTED_NAMES.values() for short in numbers]
+    assert {normalize_uuid(s) for s in shorts} | {IAP2} == PROTECTED_CLASSES
+    assert (
+        "never opens a channel whose service record lists hands-free, headset, "
+        "dial-up networking, obex object push and file transfer, phonebook, "
+        "messages, sim access or apple iap2"
+    ) in section
+    assert all(name in section for name in PROTECTED_NAMES)
+    # spp is not protected: many gadgets' control channels use it
+    assert "the serial port profile is allowed" in section
+    # firmware: only the classic firmware-update channels harald knows are blocked
+    assert "the same goes for bluetooth classic" not in section
+    assert "blocks the classic firmware-update channels it knows" in section
+    assert "airoha's tooling channel" in section
+    assert "`--allow-dfu`" in section
+    # the rest take firmware over the control channel, where harald can't tell
+    assert "over their normal control channel" in section
+    assert "can't tell an update from any other message" in section
+    assert "never send a message whose purpose it doesn't know" in section
+
+
+def test_scope_covers_le_and_classic():
+    for path in (README, CONTRIBUTING, LIBRARY / "README.md"):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert re.search("bluetooth le (and|or) classic", text), path.name
+        assert "bluetooth le protocol" not in text, path.name
+
+
+def test_descriptions_cover_classic():
+    with PYPROJECT.open("rb") as f:
+        description = tomllib.load(f)["project"]["description"]
+    assert description == (
+        "helps coding agents work out the bluetooth le and classic protocol of "
+        "gadgets you own"
+    )
+    assert _build_parser().description == (
+        "work out the bluetooth le and classic protocol of gadgets you own"
+    )

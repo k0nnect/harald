@@ -52,6 +52,23 @@ def test_crc16_le_detected():
     assert "crc16-ccitt at -2 (be)" not in checks
 
 
+def test_framed_sum8_found_in_real_xm5_frames():
+    for frame in ("3e0c01000000022200313c", "3e0c000000000200000e3c"):
+        assert "sum8 at -2 (framed)" in guess_checks(bytes.fromhex(frame))
+
+
+def test_framed_xor8():
+    body = bytes.fromhex("0c01000000022200")
+    xor = 0
+    for b in body:
+        xor ^= b
+    checks = guess_checks(b"\x3e" + body + bytes([xor]) + b"\x3c")
+    assert "xor8 at -2 (framed)" in checks
+    assert "sum8 at -2 (framed)" not in checks
+    wrong = guess_checks(b"\x3e" + body + bytes([xor ^ 0xFF]) + b"\x3c")
+    assert "xor8 at -2 (framed)" not in wrong
+
+
 def test_plain_payloads_not_encrypted():
     colors = [
         bytes.fromhex(f"7e070503{rgb}10ef") for rgb in ("ff0000", "00ff00", "0000ff")

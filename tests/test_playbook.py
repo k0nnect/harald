@@ -28,6 +28,7 @@ EMOJI_RANGES = (
 )
 NUMBERED = re.compile(r"\d+\.\s")
 METHOD_START = "## before you start"  # both docs carry the method from here on
+CLASSIC_START = "## bluetooth classic gadgets"  # the classic branch of the method
 
 
 def _source_files() -> list[Path]:
@@ -99,6 +100,82 @@ def test_human_only_commands_are_left_to_the_human():
             "never run `harald arm`, `harald write`, `harald drive` or a generated "
             "driver from your own shell"
         ) in rule, agent
+
+
+def test_classic_device_names_are_banned():
+    # the first classic library entry must not leak into the method either
+    assert {"wh-1000xm5", "sony", "mdr"} <= set(BANNED_HINTS)
+
+
+def test_method_covers_bluetooth_classic():
+    for agent in PLAYBOOK_AGENTS:
+        method = " ".join(_method(agent).split())
+        for needle in (
+            "classic_devices",
+            "classic_services",
+            "classic_send",
+            "classic_listen",
+            "system settings > bluetooth",
+            "btsnoop",
+            "iap2",
+            'transport="classic"',
+        ):
+            assert needle in method, (agent, needle)
+
+
+def test_classic_send_is_left_to_the_tool():
+    for agent in PLAYBOOK_AGENTS:
+        rules = " ".join(_method(agent).split("## the method", 1)[0].split())
+        assert (
+            "never run `harald classic send` from your own shell either; use the "
+            "`classic_send` tool"
+        ) in rules, agent
+
+
+def test_classic_branch_covers_the_apk_and_the_driver():
+    for agent in PLAYBOOK_AGENTS:
+        _, heading, branch = _method(agent).partition(CLASSIC_START)
+        assert heading, f"{agent} has no {CLASSIC_START!r}"
+        branch = " ".join(branch.split())
+        for needle in (
+            "`rfcomm-uuid`",
+            "`rfcomm-socket`",
+            'transport="classic"',
+            "`service_uuid`",
+            "`name_hint`",
+            "`init_payloads`",
+            "`reply_seconds`",
+            "hand-written driver",
+        ):
+            assert needle in branch, (agent, needle)
+
+
+def _classic_branch(agent: str) -> str:
+    _, heading, branch = _method(agent).partition(CLASSIC_START)
+    assert heading, f"{agent} has no {CLASSIC_START!r}"
+    return " ".join(branch.split())
+
+
+def test_short_listen_still_covers_the_last_reply():
+    # short listens suit acks, but a reply that lands after the channel closes is lost
+    for agent in PLAYBOOK_AGENTS:
+        branch = _classic_branch(agent)
+        step = branch[branch.index("6. ask the human to arm") :]
+        assert (
+            "the last message's `listen` must still be long enough to cover its reply"
+        ) in step, agent
+        assert "a late ack is harmless" in step, agent
+
+
+def test_classic_capture_ends_with_the_snoop_log_off():
+    # a bugreport zip holds far more than the bluetooth log
+    for agent in PLAYBOOK_AGENTS:
+        branch = _classic_branch(agent)
+        step = branch[branch.index("2. capture") : branch.index("3. find")]
+        off = "turn the bluetooth hci snoop log and usb debugging off again"
+        assert off in step, agent
+        assert "share only the extracted `btsnoop_hci.log`" in step, agent
+        assert "personal data" in step, agent
 
 
 def test_install_matches_the_readme():

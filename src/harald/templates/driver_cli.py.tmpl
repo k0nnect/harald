@@ -1,0 +1,29 @@
+def add_address(parser: argparse.ArgumentParser, default: str) -> None:
+    parser.add_argument(
+        "--address",
+        default=default,
+        metavar="address",
+        help=f"the gadget's address; empty $empty_address a {wanted_device()}",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=f"control {DEVICE.lower()} over $transport. written by harald.",
+        epilog=f"default address: {ADDRESS_HINT or '$no_address'}",
+    )
+    add_address(parser, ADDRESS_HINT)
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+    for name, (_function, params) in COMMANDS.items():
+        command = commands.add_parser(name, help=f"send {name}")
+        for param in params:
+            command.add_argument(param, metavar=param.lower())
+        add_address(command, argparse.SUPPRESS)  # so --address works after the values
+    return parser
+
+
+def fail(message: str, hint: str) -> int:
+    print(f"error: {message}", file=sys.stderr)
+    if hint:
+        print(f"  hint: {hint}", file=sys.stderr)
+    return 2

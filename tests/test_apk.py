@@ -15,6 +15,22 @@ JADX_FIXTURE = FIXTURES / "jadx-output"
 SIG_TAIL = "-0000-1000-8000-00805f9b34fb"
 GADGET = "sources/com/example/gadget"  # the fixture app's own package
 UUID_LINE = 'UUID c = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb");\n'
+SPP = "00001101-0000-1000-8000-00805f9b34fb"
+VENDOR_RFCOMM = "8901dfa8-5c7e-4d8f-9f0c-c2b70683f5f0"
+# a classic serial link in the app's own package: the standard spp uuid on line 4,
+# and a socket opened on a vendor uuid on line 7.
+SPP_LINK = (
+    "package com.example.gadget;\n"
+    "\n"
+    "public class SppLink {\n"
+    f'    static final UUID SPP = UUID.fromString("{SPP}");\n'
+    "\n"
+    "    BluetoothSocket open(BluetoothDevice device) throws IOException {\n"
+    "        return device.createRfcommSocketToServiceRecord("
+    f'UUID.fromString("{VENDOR_RFCOMM}"));\n'
+    "    }\n"
+    "}\n"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -295,6 +311,8 @@ def test_totals_count_every_kind_and_nothing_is_cut(tmp_path):
         "aes-key": 2,
         "base64-blob": 2,
         "command-builder": 2,
+        "rfcomm-uuid": 0,
+        "rfcomm-socket": 0,
     }
     assert report.warnings == []
     assert not (report.jadx_dir / "harald-candidates.txt").exists()
@@ -325,3 +343,39 @@ def test_caps_keep_the_own_package_first_and_list_everything_in_a_file(tmp_path)
     text = listing.read_text()
     assert all(f"{i:08x}{SIG_TAIL}" in text for i in range(60))
     assert text.count("char-uuid") == 61
+
+
+def test_rfcomm_sockets_and_their_uuids_are_flagged(tmp_path):
+    runner = _jadx_writing({"com/example/gadget/SppLink.java": SPP_LINK})
+
+    report = _native_report(tmp_path, runner=runner)
+
+    found = [(c.kind, c.location) for c in report.candidates]
+    assert found == [
+        ("rfcomm-uuid", f"{GADGET}/SppLink.java:4"),
+        ("rfcomm-uuid", f"{GADGET}/SppLink.java:7"),
+        ("rfcomm-socket", f"{GADGET}/SppLink.java:7"),
+    ]
+    # gatt_uuids keeps its name and holds every uuid found, classic ones included
+    assert report.gatt_uuids == [SPP, VENDOR_RFCOMM]
+    assert report.totals["rfcomm-uuid"] == 2
+    assert report.totals["rfcomm-socket"] == 1
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "createRfcommSocketToServiceRecord(SPP)",
+        "createInsecureRfcommSocketToServiceRecord(SPP)",
+        'listenUsingRfcommWithServiceRecord("spp", SPP)',
+        'listenUsingInsecureRfcommWithServiceRecord("spp", SPP)',
+    ],
+)
+def test_every_rfcomm_socket_call_is_flagged(tmp_path, call):
+    runner = _jadx_writing({"com/example/gadget/Link.java": f"s = link.{call};\n"})
+
+    report = _native_report(tmp_path, runner=runner)
+
+    assert [(c.kind, c.location) for c in report.candidates] == [
+        ("rfcomm-socket", f"{GADGET}/Link.java:1")
+    ]

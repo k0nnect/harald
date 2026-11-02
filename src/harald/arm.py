@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,11 +25,14 @@ DFU_UUIDS: frozenset[str] = frozenset(
         "0000fe59-0000-1000-8000-00805f9b34fb",  # nordic secure dfu
         "1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0",  # silicon labs ota
         "f000ffc0-0451-4000-b000-000000000000",  # ti oad
+        "8901dfa8-5c7e-4d8f-9f0c-c2b70683f5f0",  # airoha tooling: flash read/write
     }
 )
 
 _BASE_UUID_TAIL = "-0000-1000-8000-00805f9b34fb"
 _HEX = frozenset("0123456789abcdef")
+# six hex pairs joined by ":" or "-": a mac address, as bluetooth classic devices use
+MAC_ADDRESS = re.compile(r"[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}", re.IGNORECASE)
 
 
 @dataclass
@@ -58,13 +62,13 @@ def arm(
     """Grant `writes` writes to `device` for `minutes`, replacing any earlier grant."""
     now = _now(now)
     grant = ArmGrant(
-        device=device,
+        device=device_key(device),
         writes_left=writes,
         expires_at=now + minutes * 60,
         allow_dfu=allow_dfu,
     )
     with _locked_state(now) as grants:
-        grants[device.lower()] = grant
+        grants[grant.device] = grant
     return grant
 
 
@@ -74,24 +78,40 @@ def consume_write(
     """Spend one write from the device's budget, or raise WriteDenied."""
     now = _now(now)
     with _locked_state(now) as grants:
-        grant = grants.get(device.lower())
-        if grant is None:
-            raise WriteDenied(
-                f"writes to {device} are locked",
-                hint=f"ask the human to run: harald arm {device} --writes 50 --minutes 30",
-            )
-        if _normalize_uuid(service_uuid) in DFU_UUIDS and not grant.allow_dfu:
-            raise WriteDenied(
-                "firmware-update service blocked",
-                hint=f"only a human can allow this: harald arm {device} --allow-dfu",
-            )
+        grant = check_write(device, grants.get(device_key(device)), service_uuid)
         grant.writes_left -= 1
         return grant
 
 
+def check_write(
+    device: str, grant: ArmGrant | None, service_uuid: str | None = None
+) -> ArmGrant:
+    """Return `grant` if it lets `device` be written, or raise the WriteDenied it earns.
+
+    The gate's one source of refusals: consume_write runs it on every write, and
+    classic.send runs it before opening anything. With no `service_uuid`, only the
+    lock is checked.
+    """
+    if grant is None:
+        raise WriteDenied(
+            f"writes to {device} are locked",
+            hint=f"ask the human to run: harald arm {device} --writes 50 --minutes 30",
+        )
+    if (
+        service_uuid is not None
+        and normalize_uuid(service_uuid) in DFU_UUIDS
+        and not grant.allow_dfu
+    ):
+        raise WriteDenied(
+            "firmware-update service blocked",
+            hint=f"only a human can allow this: harald arm {device} --allow-dfu",
+        )
+    return grant
+
+
 def disarm(device: str) -> None:
     with _locked_state(_now(None)) as grants:
-        grants.pop(device.lower(), None)
+        grants.pop(device_key(device), None)
 
 
 def status(*, now: float | None = None) -> list[ArmGrant]:
@@ -101,13 +121,36 @@ def status(*, now: float | None = None) -> list[ArmGrant]:
         return list(grants.values())
 
 
+def live_grant(device: str, *, now: float | None = None) -> ArmGrant | None:
+    """Return the device's live grant without spending from it, or None if unarmed."""
+    now = _now(now)
+    with _locked_state(now) as grants:
+        return grants.get(device_key(device))
+
+
+def device_key(device: str) -> str:
+    """The key a device's grant is stored under.
+
+    A mac address (bluetooth classic) becomes lowercase colon form, so
+    `AA-BB-CC-11-22-33` and `aa:bb:cc:11:22:33` share one grant. Anything else, such
+    as the uuid macos gives a ble device, is only lowercased, as in v0.1.
+    """
+    if MAC_ADDRESS.fullmatch(device):
+        return device.lower().replace("-", ":")
+    return device.lower()
+
+
 def _now(now: float | None) -> float:
     return time.time() if now is None else now
 
 
-def _normalize_uuid(uuid: str) -> str:
-    """Lowercase, and expand 16/32-bit short uuids to the bluetooth base uuid."""
-    uuid = uuid.strip().lower()
+def normalize_uuid(text: str) -> str:
+    """Lowercase, and expand 16/32-bit short uuids to the bluetooth base uuid.
+
+    The one uuid normalizer: the write gate's firmware-update check here and the
+    classic channel rules in classic.py must judge uuids the same way.
+    """
+    uuid = text.strip().lower()
     if len(uuid) in (4, 8) and set(uuid) <= _HEX:
         return uuid.rjust(8, "0") + _BASE_UUID_TAIL
     return uuid

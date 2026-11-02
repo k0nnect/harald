@@ -17,7 +17,7 @@ from harald.errors import HaraldError
 
 PLAYBOOK_AGENTS: tuple[str, ...] = ("claude-code", "codex")
 
-BANNED_HINTS: tuple[str, ...] = ("istrip",)
+BANNED_HINTS: tuple[str, ...] = ("istrip", "wh-1000xm5", "sony", "mdr")
 
 _FILENAMES = {"claude-code": "SKILL.md", "codex": "AGENTS.md"}
 

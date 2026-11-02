@@ -53,7 +53,9 @@ def guess_checks(payload: bytes) -> list[str]:
     """Name the common integrity and length fields this payload is consistent with.
 
     A length byte at position i matches when it equals the total length n, the
-    bytes from it onward (n - i), or the bytes after it (n - i - 1).
+    bytes from it onward (n - i), or the bytes after it (n - i - 1). A framed
+    checksum is the byte before a trailing end marker, over the bytes after a
+    leading start marker.
     """
     n = len(payload)
     found: list[str] = []
@@ -61,10 +63,7 @@ def guess_checks(payload: bytes) -> list[str]:
         body, last = payload[:-1], payload[-1]
         if sum(body) & 0xFF == last:
             found.append("sum8 at -1")
-        xor = 0
-        for b in body:
-            xor ^= b
-        if xor == last:
+        if _xor8(body) == last:
             found.append("xor8 at -1")
     for i in (0, 1):
         if n > i and payload[i] in (n, n - i, n - i - 1):
@@ -75,7 +74,20 @@ def guess_checks(payload: bytes) -> list[str]:
             found.append("crc16-ccitt at -2 (le)")
         if payload[-2:] == crc.to_bytes(2, "big"):
             found.append("crc16-ccitt at -2 (be)")
+    if n >= 4:
+        framed, check = payload[1:-2], payload[-2]
+        if sum(framed) & 0xFF == check:
+            found.append("sum8 at -2 (framed)")
+        if _xor8(framed) == check:
+            found.append("xor8 at -2 (framed)")
     return found
+
+
+def _xor8(data: bytes) -> int:
+    xor = 0
+    for b in data:
+        xor ^= b
+    return xor
 
 
 def crc16_ccitt(data: bytes) -> int:

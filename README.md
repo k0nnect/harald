@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://pypi.org/project/harald/"><img alt="pypi" src="https://img.shields.io/pypi/v/harald?style=flat&label=pypi&labelColor=2b2b2b&color=c8102e"></a>
   <a href="#四-agent-setup"><img alt="works with: claude code · codex · cursor" src="https://img.shields.io/badge/works%20with-claude%20code%20%C2%B7%20codex%20%C2%B7%20cursor-2b4bd8?style=flat&labelColor=2b2b2b"></a>
-  <a href="#三-devices"><img alt="devices: 0 decoded" src="https://img.shields.io/badge/devices-0%20decoded-4a4640?style=flat&labelColor=2b2b2b"></a>
+  <a href="#三-devices"><img alt="devices: 1 decoded" src="https://img.shields.io/badge/devices-1%20decoded-4a4640?style=flat&labelColor=2b2b2b"></a>
   <a href="https://github.com/k0nnect/harald/blob/main/LICENSE"><img alt="license: mit" src="https://img.shields.io/badge/license-mit-4a4640?style=flat&labelColor=2b2b2b"></a>
 </p>
 
@@ -13,7 +13,8 @@
   <a href="#二-install">install</a> &nbsp;/&nbsp;
   <a href="#一-how-it-works">how it works</a> &nbsp;/&nbsp;
   <a href="#三-devices">devices</a> &nbsp;/&nbsp;
-  <a href="#六-contributing-a-device">add your device</a>
+  <a href="#五-bluetooth-classic">bluetooth classic</a> &nbsp;/&nbsp;
+  <a href="#七-contributing-a-device">add your device</a>
 </p>
 
 ![a coding agent works out an led strip's protocol with harald, then turns the strip pink](https://raw.githubusercontent.com/k0nnect/harald/main/assets/demo.gif)
@@ -23,8 +24,9 @@
 ## 一 how it works
 
 harald is an mcp server, a cli and a playbook for coding agents. it gives your agent
-hands and ears for bluetooth le, so it can work out the protocol of a gadget you own.
-then you control that gadget from your own code instead of the vendor's app.
+hands and ears for bluetooth le and classic, so it can work out the protocol of a
+gadget you own. then you control that gadget from your own code instead of the
+vendor's app.
 
 | *listen* | *decode* | *speak* |
 | :--- | :--- | :--- |
@@ -64,13 +66,15 @@ harald devices                       list the device library
 harald drive <slug> <command>        run a library device's driver
 ```
 
-`harald --help` lists the rest.
+`harald --help` lists the rest, and [bluetooth classic](#五-bluetooth-classic) has
+the commands for classic gadgets.
 
 ## 三 devices
 
 | device | what harald found | status |
 | :--- | :--- | :--- |
 | istrip+ led strip | being worked out on real hardware | in progress |
+| sony wh-1000xm5 headphones | noise cancelling, ambient and battery over bluetooth classic | decoded |
 | your device | open a pull request with its `device.toml`, `protocol.md` and `driver.py` | wanted |
 
 each decoded device lives in
@@ -133,7 +137,9 @@ then ask your agent to work out your gadget with harald. it will ask you for two
 only you can do.
 
 **record your phone talking to the gadget.** a computer cannot overhear phone-to-gadget
-traffic without extra hardware, so the log comes from your own iphone.
+traffic without extra hardware, so the log comes from your own iphone. a bluetooth
+classic gadget's log comes from an android phone instead; see
+[bluetooth classic](#五-bluetooth-classic).
 
 1. on the iphone, install apple's bluetooth logging profile: "bluetooth for ios/ipados"
    on apple's [profiles and logs](https://developer.apple.com/bug-reporting/profiles-and-logs/?name=bluetooth)
@@ -156,7 +162,57 @@ harald never downloads apps: download it yourself from
 [apkeep](https://github.com/EFForg/apkeep) (`apkeep -a <package name> .`). the package
 name is the `id=` part of the app's play store address.
 
-## 五 safety
+## 五 bluetooth classic
+
+some gadgets, often headphones and speakers, are controlled over bluetooth classic
+instead of bluetooth le: the vendor app talks to an rfcomm channel, a plain byte
+stream. harald reaches those too, on a mac only for now; bluetooth le works as before.
+
+pair the gadget in system settings > bluetooth first and keep it connected there.
+harald doesn't search for or pair classic gadgets, and `harald scan` only sees
+bluetooth le. classic addresses look like `aa:bb:cc:11:22:33`.
+
+```text
+harald classic devices                         list the gadgets paired with this mac
+harald classic services <address>              list a gadget's rfcomm services
+harald classic send <address> <service> <hex>  send messages, once you have armed it
+harald classic listen <address> <service>      show what a channel says, sending nothing
+harald capture open <file> --channel n         show one rfcomm channel of a capture
+```
+
+`<service>` is a service uuid or channel number from `harald classic services`; add
+`--refresh` there when the list looks out of date. `harald classic send` takes one or
+more messages and sends them in order, listening for replies after each one
+(`--listen s`, 2 seconds by default). if the grant runs out or the link fails
+partway, it prints what it sent and received, says why on stderr and exits 1.
+`harald classic listen` sends nothing and listens for `--seconds s` (5 by default).
+either listens for at most 30 seconds at a time.
+
+like `harald write`, `harald classic send` needs `harald arm <address>` first, and
+every message spends one write from the grant, a query too. harald never opens the
+channels of protected profiles such as hands-free or file transfer; see
+[safety](#六-safety). your agent gets the same four as mcp tools: `classic_devices`,
+`classic_services`, `classic_send` and `classic_listen`. none of them arms.
+
+**classic captures come from android.** an iphone capture of a classic gadget shows
+only apple's iap2 wrapper, which harald can't unwrap yet, so record the vendor app
+from an android phone's bluetooth log:
+
+1. turn on developer options (tap the build number seven times in the phone's about
+   screen), then turn on the bluetooth hci snoop log in them, choosing enabled
+   rather than filtered if it asks.
+2. with the vendor app closed, turn the phone's bluetooth off and on, so the log is
+   running before the app opens its channel.
+3. in the vendor app, do one thing at a time, a few seconds apart, as your agent
+   asks.
+4. with usb debugging on, run `adb bugreport`. its zip holds `btsnoop_hci.log`; give
+   your agent that file's path, or look at it yourself with
+   `harald capture open btsnoop_hci.log`.
+
+`harald apk` flags the rfcomm sockets and uuids in a vendor's android app as well as
+its bluetooth le calls.
+
+## 六 safety
 
 harald is for gadgets you own: interoperability and research. don't use it on anyone
 else's devices.
@@ -175,17 +231,31 @@ else's devices.
   agent, but it is not a sandbox. grants live in a file, `~/.harald/arm.json`, and
   any agent that can run arbitrary commands or write files on your machine could get
   around the gate. what keeps a cooperative agent out is the playbook's rule: it
-  never runs `harald arm`, `harald write`, `harald drive` or a driver from its own
-  shell; you do.
+  never runs `harald arm`, `harald write`, `harald drive`, `harald classic send` or
+  a driver from its own shell; you do. it sends classic messages only through its
+  `classic_send` tool.
 - **firmware updates are blocked.** writes to firmware-update (dfu) services stay
   refused even when a device is armed, so a stray write cannot start a firmware update.
   only `--allow-dfu` on `harald arm` lifts that, and working out a protocol never
-  needs it.
+  needs it. harald also blocks the classic firmware-update channels it knows, so far
+  airoha's tooling channel, the same way unless you arm with `--allow-dfu`. but many
+  classic gadgets take firmware over their normal control channel, where harald can't
+  tell an update from any other message, so your agent must never send a message
+  whose purpose it doesn't know.
+- **classic channels are fenced.** harald never opens a channel whose service record
+  lists hands-free, headset, dial-up networking, obex object push and file transfer,
+  phonebook, messages, sim access or apple iap2. the serial port profile is allowed,
+  since many gadgets' control channels use it. harald also refuses channels missing
+  from the device's service list. with `harald classic send`, every message spends
+  one write, a query too.
+- **library drivers need no arming.** `harald drive` runs a `devices/` entry's
+  standalone driver, which you start yourself, so it sits outside the gate. read a
+  driver before you run it, as you would any script.
 - **only app-wide keys are shared.** a `devices/` entry may carry a key only if it is
   the same on every unit and ships inside the vendor app. per-unit keys and pairing
   keys never go in the library; they stay in your own `harald-work/` folder.
 
-## 六 contributing a device
+## 七 contributing a device
 
 cracked a gadget? your agent's work is in `harald-work/<slug>/`. turn it into
 `devices/<slug>/` with a `device.toml`, `protocol.md` and `driver.py`, then open a pull

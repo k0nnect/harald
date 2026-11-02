@@ -50,112 +50,7 @@ NOT_FOUND_HINT = (
     "connection), move closer, or pass --address"
 )
 
-# colour names for rgb_bytes, with values for leds rather than screens. an led strip
-# mixes light, so a pale css colour such as pink (ffc0cb) shows as near white: each
-# colour here is saturated instead, e.g. pink is deep pink, and green is full green.
-# maroon, olive, teal, navy, gray and silver are the dim versions of their colours.
-COLORS = {
-    "black": "000000",
-    "silver": "c0c0c0",
-    "gray": "808080",
-    "white": "ffffff",
-    "maroon": "800000",
-    "red": "ff0000",
-    "purple": "b000ff",
-    "fuchsia": "ff00ff",
-    "magenta": "ff00ff",
-    "green": "00ff00",
-    "lime": "00ff00",
-    "olive": "808000",
-    "yellow": "ffff00",
-    "navy": "000080",
-    "blue": "0000ff",
-    "teal": "008080",
-    "aqua": "00ffff",
-    "cyan": "00ffff",
-    "orange": "ff4500",
-    "pink": "ff1493",
-    "violet": "8000ff",
-    "indigo": "4000ff",
-    "gold": "ff8c00",
-    "brown": "a52a00",
-}
-
-
-class DriverError(Exception):
-    """An expected failure, printed as an error line and a hint line."""
-
-    def __init__(self, message: str, hint: str = "") -> None:
-        super().__init__(message)
-        self.message = message
-        self.hint = hint
-
-
-def rgb_bytes(value: str) -> bytes:
-    """Three bytes r, g, b from a colour name in COLORS or 6-digit hex such as ff8800."""
-    text = value.strip().lower()
-    text = COLORS.get(text, text).removeprefix("#")
-    if len(text) != 6 or any(c not in "0123456789abcdef" for c in text):
-        raise DriverError(
-            f"unknown colour: {value}",
-            "use a colour name such as pink or red, or 6-digit hex such as ff8800",
-        )
-    return bytes.fromhex(text)
-
-
-# one function per command. each takes the command's values, as strings from the
-# command line, and returns the plaintext payload.
-
-
-$commands
-
-
-COMMANDS = {  # command name: (payload function, its values)
-$command_table
-}
-
-
-def build_payload(command: str, values: list[str]) -> bytes:
-    """The plaintext payload for `command` with these values."""
-    function, _params = COMMANDS[command]
-    try:
-        payload = function(*values)
-    except (ValueError, TypeError, OverflowError) as exc:  # e.g. int("abc")
-        raise DriverError(
-            f"bad value for {command}: {str(exc).lower()}",
-            f"see uv run driver.py {command} --help",
-        ) from exc
-    if not isinstance(payload, (bytes, bytearray)):
-        raise DriverError(
-            f"{function.__name__} returned {type(payload).__name__.lower()}, not bytes",
-            f"make {function.__name__} in driver.py return bytes",
-        )
-    return bytes(payload)
-
-
-def encrypt(plaintext: bytes) -> bytes:
-    """`plaintext` encrypted with KEY_HEX in CIPHER's mode, or as it is without one.
-
-    nothing is padded: the plaintext has to be whole 16-byte blocks.
-    """
-    if CIPHER is None:
-        return plaintext
-    if CIPHER == "aes-ecb":
-        mode = modes.ECB()
-    elif CIPHER == "aes-cbc-zero-iv":
-        mode = modes.CBC(bytes(16))
-    else:
-        raise DriverError(
-            f"unknown cipher: {CIPHER}",
-            "set CIPHER to None, aes-ecb or aes-cbc-zero-iv",
-        )
-    if not plaintext or len(plaintext) % 16:
-        raise DriverError(
-            f"the plaintext is {len(plaintext)} bytes; aes needs whole 16-byte blocks",
-            "this driver adds no padding, so pad the payload in its command's function",
-        )
-    encryptor = Cipher(algorithms.AES(bytes.fromhex(KEY_HEX)), mode).encryptor()
-    return encryptor.update(plaintext) + encryptor.finalize()
+$payload_code
 
 
 def wanted_device() -> str:
@@ -227,35 +122,7 @@ async def send(address: str, payload: bytes) -> str:
     return address
 
 
-def add_address(parser: argparse.ArgumentParser, default: str) -> None:
-    parser.add_argument(
-        "--address",
-        default=default,
-        metavar="address",
-        help=f"the gadget's address; empty scans for a {wanted_device()}",
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=f"control {DEVICE.lower()} over bluetooth le. written by harald.",
-        epilog=f"default address: {ADDRESS_HINT or 'none, so it scans'}",
-    )
-    add_address(parser, ADDRESS_HINT)
-    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
-    for name, (_function, params) in COMMANDS.items():
-        command = commands.add_parser(name, help=f"send {name}")
-        for param in params:
-            command.add_argument(param, metavar=param.lower())
-        add_address(command, argparse.SUPPRESS)  # so --address works after the values
-    return parser
-
-
-def fail(message: str, hint: str) -> int:
-    print(f"error: {message}", file=sys.stderr)
-    if hint:
-        print(f"  hint: {hint}", file=sys.stderr)
-    return 2
+$cli_code
 
 
 def main(argv: list[str] | None = None) -> int:
