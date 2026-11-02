@@ -109,13 +109,41 @@ def test_banner_is_outlined_paths():
     assert "<tspan" not in svg
 
 
-def test_readme_images_have_absolute_urls():
+def _image_srcs(text: str) -> list[str]:
+    return [html or md for html, md in IMAGE_SRC.findall(FENCE.sub("", text))]
+
+
+def _pypi_description() -> str:
+    """README.md as the build's readme hook rewrites it for pypi."""
+    with PYPROJECT.open("rb") as f:
+        hooks = tomllib.load(f)["tool"]["hatch"]["metadata"]["hooks"]
+    hook = hooks["fancy-pypi-readme"]
+    assert hook["fragments"] == [{"path": "README.md"}]
+    text = README.read_text(encoding="utf-8")
+    for sub in hook["substitutions"]:
+        flags = re.IGNORECASE if sub.get("ignore-case") else 0
+        text = re.sub(sub["pattern"], sub["replacement"], text, flags=flags)
+    return text
+
+
+def test_readme_images_are_repo_relative():
+    # relative, so github renders them on any branch, before main has them
+    srcs = _image_srcs(README.read_text(encoding="utf-8"))
+    assert len(srcs) >= 6
+    ours = [src for src in srcs if not src.startswith("https://")]
+    assert ours == ["assets/banner.svg", "assets/demo.gif"]
+
+
+def test_pypi_description_has_absolute_image_urls():
     # pypi renders the readme away from the repo, where a relative src finds nothing
-    srcs = [html or md for html, md in IMAGE_SRC.findall(_prose(README))]
+    text = _pypi_description()
+    srcs = _image_srcs(text)
     assert len(srcs) >= 6
     assert all(src.startswith("https://") for src in srcs), srcs
     ours = [src for src in srcs if "assets/" in src]
     assert ours == [RAW_ASSETS + "banner.svg", RAW_ASSETS + "demo.gif"]
+    # only the image srcs change; the rest of the readme goes to pypi as it is
+    assert text.replace(RAW_ASSETS, "assets/") == README.read_text(encoding="utf-8")
 
 
 def test_readme_links_work_off_github():

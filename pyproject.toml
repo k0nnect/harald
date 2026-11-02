@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=22.5"]
 build-backend = "hatchling.build"
 
 [project]
 name = "harald"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "helps coding agents work out the bluetooth le and classic protocol of gadgets you own"
-readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -36,6 +35,26 @@ dev = [
 
 [tool.hatch.version]
 path = "src/harald/__init__.py"
+
+# pypi shows README.md away from the repo, where its relative image paths find
+# nothing, so the long description points them at the files on main instead
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(<img\b[^>]*\bsrc=")assets/'
+replacement = '\1https://raw.githubusercontent.com/k0nnect/harald/main/assets/'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(!\[[^\]]*\]\()assets/'
+replacement = '\1https://raw.githubusercontent.com/k0nnect/harald/main/assets/'
+
+[tool.hatch.build.targets.sdist]
+# the demo gif and the tooling that makes it are for the repo page, not the package
+exclude = ["/assets/demo.gif", "/tools"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harald"]
