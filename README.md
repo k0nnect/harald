@@ -264,3 +264,5 @@ has the details, including the keys rule.
 
 <sub>mit license. harald is named after king harald "bluetooth" of denmark, after whom
 bluetooth is named; ᚼᛅᚱᛅᛚᛏᚱ is his name as it is carved on the jelling stone.</sub>
+
+<!-- mcp-name: io.github.k0nnect/harald -->

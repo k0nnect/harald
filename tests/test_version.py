@@ -5,7 +5,7 @@ import harald
 
 
 def test_version_string():
-    assert harald.__version__ == "0.2.0"
+    assert harald.__version__ == "0.2.1"
 
 
 def test_module_runs():
@@ -15,4 +15,4 @@ def test_module_runs():
         text=True,
         check=False,
     )
-    assert out.returncode == 0 and out.stdout.strip() == "harald 0.2.0"
+    assert out.returncode == 0 and out.stdout.strip() == "harald 0.2.1"
