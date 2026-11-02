@@ -132,6 +132,9 @@ def test_readme_images_are_repo_relative():
     assert len(srcs) >= 6
     ours = [src for src in srcs if not src.startswith("https://")]
     assert ours == ["assets/banner.svg", "assets/demo.gif"]
+    assert all((REPO / src).is_file() for src in ours), ours
+    # the hero has to load fast on the repo page
+    assert (REPO / "assets" / "demo.gif").stat().st_size < 4_000_000
 
 
 def test_pypi_description_has_absolute_image_urls():
