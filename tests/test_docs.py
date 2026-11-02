@@ -15,6 +15,12 @@ CONTRIBUTING = REPO / "CONTRIBUTING.md"
 BANNER = REPO / "assets" / "banner.svg"
 LIBRARY = REPO / "devices"
 PYPROJECT = REPO / "pyproject.toml"
+PLAYBOOK = REPO / "src" / "harald" / "playbook"
+TEMPLATES = REPO / "src" / "harald" / "templates"
+EXPERIMENTAL = (
+    "linux is experimental: tested against an emulated gadget, not yet on real "
+    "hardware. if you run it on linux, tell us how it went in an issue."
+)
 
 # emoji blocks: misc technical, misc symbols and dingbats, arrows and shapes,
 # the emoji variation selector, the zero-width joiner, and everything from mahjong
@@ -158,11 +164,53 @@ def test_readme_links_work_off_github():
     assert REPO_URL + "blob/main/CONTRIBUTING.md" in targets
 
 
-def test_readme_claims_tested_on_mac():
-    text = README.read_text(encoding="utf-8").lower()
-    assert "tested on mac" in text
-    for system in ("linux", "windows"):
-        assert system not in text, f"README.md mentions {system}"
+def test_readme_claims_tested_on_mac_and_linux_experimental():
+    text = " ".join(README.read_text(encoding="utf-8").lower().split())
+    assert "tested on mac; linux is experimental" in text
+    assert EXPERIMENTAL in text
+    assert "windows" not in text
+
+
+def test_install_has_a_linux_part():
+    section = _section(README.read_text(encoding="utf-8"), SECTIONS[1])
+    _, heading, part = " ".join(section.split()).partition("**linux (experimental)**")
+    assert heading, "install has no linux (experimental) part"
+    for phrase in (
+        "bluez 5.50",
+        "bluetoothd running",
+        "`bluetooth` group",
+        "log out and back in",
+        "snap or flatpak",
+        "no root",
+        "`bluetoothctl power on`",
+        "`rfkill unblock bluetooth`",
+        "`systemctl status bluetooth`",
+        "`bluetoothctl remove <address>`",
+        EXPERIMENTAL,
+    ):
+        assert phrase in part, phrase
+    # the order bluez needs: pairable first, or the bond is gone after a disconnect
+    steps = [
+        part.index(f"`bluetoothctl {step}")
+        for step in ("pairable on`", "scan on`", "pair <address>`", "trust <address>`")
+    ]
+    assert steps == sorted(steps)
+
+
+def test_no_mac_only_wording():
+    paths = [
+        README,
+        CONTRIBUTING,
+        LIBRARY / "README.md",
+        PLAYBOOK / "claude-code" / "SKILL.md",
+        PLAYBOOK / "codex" / "AGENTS.md",
+        *(path for path in TEMPLATES.rglob("*") if path.is_file()),
+    ]
+    assert len(paths) > 6
+    for path in paths:
+        text = " ".join(path.read_text(encoding="utf-8").lower().split())
+        for phrase in ("mac only", "mac-only", "on a mac only", "paired with the mac"):
+            assert phrase not in text, f"{path.name}: {phrase!r}"
 
 
 def test_install_puts_harald_on_the_path():
@@ -257,8 +305,11 @@ def test_readme_has_classic_section():
     section = " ".join(_section(README.read_text(encoding="utf-8"), CLASSIC).split())
     for phrase in (
         "bluetooth classic",
-        "mac only",
+        "on a mac or linux",
         "system settings > bluetooth",
+        "`bluetoothctl`",
+        "paired with this computer",
+        "in range",
         "harald classic devices",
         "harald classic services",
         "harald classic send",

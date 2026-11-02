@@ -1,17 +1,31 @@
 """The wh-1000xm5 driver, through a fake link: no test opens a real channel.
 
-Byte strings marked "real" were seen on real headphones (the spike and h2).
+Byte strings marked "real" were seen on real headphones (the spike and h2). The linux
+path runs against a fake bluez, sdp server and rfcomm peer (tests/linux_fakes.py).
 """
 
 import ast
 import contextlib
+import errno
 import importlib.util
+import socket
 import sys
+import types
 from pathlib import Path
 
 import pytest
+from classic_fakes import XM5_ADDRESS, XM5_RECORDS
+from linux_fakes import Rig, bluez, device, names_needed
+
+from harald import btsock, hints
+from harald.templates import linux_link
 
 DRIVER = Path(__file__).resolve().parents[1] / "devices" / "wh-1000xm5" / "driver.py"
+# the lines around the driver's copy of harald's linux link
+LINK_START = (
+    "# --- linux link: copied from harald's templates/linux_link.py.tmpl as it is ---\n"
+)
+LINK_END = "\n# --- end of the linux link "
 
 
 def _load():
@@ -230,7 +244,7 @@ def test_no_state_reply_raises():
     assert "move closer" in e.value.hint
 
 
-def test_handshake_unanswered_raises():
+def test_handshake_unanswered_raises(on_mac):
     link = FakeLink()
     with pytest.raises(drv.DriverError) as e:
         drv.Mdr(link).handshake()
@@ -362,7 +376,7 @@ def test_main_prints_the_line_and_passes_the_address(monkeypatch, capsys):
     assert opened == ["AA-BB-CC-11-22-33"]
 
 
-def test_main_prints_driver_errors(monkeypatch, capsys):
+def test_main_prints_driver_errors(monkeypatch, capsys, on_mac):
     @contextlib.contextmanager
     def fake_open(address):
         yield FakeLink()
@@ -381,6 +395,7 @@ def test_driver_is_standalone():
     assert source.startswith("# /// script\n")
     header = source.split("# ///\n", 1)[0]
     assert "pyobjc-framework-IOBluetooth>=11; sys_platform == 'darwin'" in header
+    assert "dbus-fast>=2; sys_platform == 'linux'" in header
     tree = ast.parse(source)
     everywhere = {
         alias.name.split(".")[0]
@@ -407,3 +422,134 @@ def test_driver_is_standalone():
     assert not top & {"IOBluetooth", "objc", "Foundation"}
     assert drv.SERVICE_UUID == "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"
     assert drv.NAME_HINT == "WH-1000XM5"
+
+
+# --- on linux, through the linux link -----------------------------------------
+
+
+def test_xm5_linux_link_matches_template():
+    # the driver cannot import harald, so it carries the block; it must not drift
+    source = DRIVER.read_text(encoding="utf-8")
+    assert source.count(LINK_START) == source.count(LINK_END) == 1
+    copy = source.split(LINK_START)[1].split(LINK_END)[0]
+    assert copy.strip("\n") == linux_link()
+    assert names_needed(linux_link(), source) == set()
+
+
+def test_docstring_says_it_runs_on_a_mac_or_linux():
+    assert "mac or linux" in drv.__doc__
+    assert "paired with this mac" not in drv.__doc__
+
+
+def test_linux_words_say_nothing_of_a_mac(on_linux):
+    with pytest.raises(drv.DriverError) as e:
+        drv.Mdr(FakeLink()).handshake()
+    assert e.value.hint == (
+        "close the sony app on your phone, "
+        "then restart bluetooth with sudo systemctl restart bluetooth"
+    )
+    with pytest.raises(drv.DriverError) as e:
+        drv.run(["status"], FakeLink(HANDSHAKE_REPLY, ack(0)))
+    assert e.value.message == "the headphones did not answer"
+    assert e.value.hint == hints.timeout()
+
+
+@pytest.fixture
+def linux(monkeypatch):
+    """The driver on linux: bluez has the headphones paired, their sdp server holds
+    the real records (control channel 9), and a socketpair is the channel."""
+    objects = bluez(
+        device("11:22:33:44:55:66", alias="phone"),
+        device(XM5_ADDRESS, alias="WH-1000XM5", uuids=[drv.SERVICE_UUID]),
+    )
+    rig = Rig(drv, monkeypatch, objects, XM5_RECORDS)
+    yield rig
+    rig.close()
+
+
+def replay(*replies):
+    """A peer's answer: the next of `replies` for each data frame the driver sends,
+    nothing for its acks."""
+    deframer, left = drv.Deframer(), list(replies)
+
+    def answer(raw):
+        frames = deframer.feed(raw)
+        return b"".join(left.pop(0) for t, _, _ in frames if t == 0x0C and left)
+
+    return answer
+
+
+def test_battery_on_linux(linux, capsys):
+    peer = linux.serve(replay(HANDSHAKE_REPLY, ack(0) + data(0, "23005600")))
+    assert drv.main(["battery"]) == 0
+    assert capsys.readouterr().out == "battery 86%, not charging\n"
+    assert peer.hung_up.wait(1)  # the channel closed after the one command
+    frames = drv.Deframer().feed(bytes(peer.received))
+    assert [(t, s, p.hex()) for t, s, p in frames] == [
+        (0x0C, 0, "0000"),
+        (0x01, 0, ""),  # the handshake reply's ack
+        (0x0C, 1, "2200"),
+        (0x01, 1, ""),
+    ]
+    assert linux.connects == [
+        btsock.sockaddr_l2(XM5_ADDRESS, btsock.SDP_PSM),
+        btsock.sockaddr_rc(XM5_ADDRESS, 9),
+    ]
+
+
+def test_linux_by_address_and_errors(linux, capsys):
+    peer = linux.serve(replay(HANDSHAKE_REPLY, ack(0) + data(0, "23001401")))
+    assert drv.main(["--address", XM5_ADDRESS.upper(), "battery"]) == 0
+    assert capsys.readouterr().out == "battery 20%, charging\n"
+    assert peer.hung_up.wait(1)
+    assert drv.main(["--address", "aa:bb:cc:dd:ee:ff", "battery"]) == 2
+    assert capsys.readouterr().err == (
+        "error: aa:bb:cc:dd:ee:ff is not paired with this computer\n"
+        f"  hint: {hints.pair('aa:bb:cc:dd:ee:ff')}\n"
+    )
+    linux.bluez.objects = bluez(powered=(False,))
+    assert drv.main(["battery"]) == 2
+    assert capsys.readouterr().err == (
+        f"error: {hints.bluetooth_off_message()}\n  hint: {hints.bluetooth_off()}\n"
+    )
+
+
+@pytest.mark.parametrize("has_bluetooth", [True, False])
+def test_linux_without_a_system_bus(linux, capsys, has_bluetooth):
+    # with no system bus, a kernel with no bluetooth at all (wsl, a container) is
+    # told so; any other linux gets the bluetoothd hint
+    linux.bluez.connect_error = FileNotFoundError(2, "No such file or directory")
+    linux.kernel_bluetooth = has_bluetooth
+    assert drv.main(["battery"]) == 2
+    if has_bluetooth:
+        message, hint = hints.bluetooth_off_message(), hints.bluetooth_off()
+    else:
+        message, hint = hints.no_bluetooth_support()
+    assert capsys.readouterr().err == f"error: {message}\n  hint: {hint}\n"
+    assert linux.probes == 1
+    assert linux.connects == []  # nothing was opened
+
+
+@pytest.mark.parametrize("err", [errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, None])
+def test_linux_kernel_probe_makes_one_socket_and_closes_it(monkeypatch, err):
+    made = []
+
+    def new_socket(kind, proto):
+        if err is not None:
+            raise OSError(err, "no bluetooth here")
+        made.append((kind, proto))
+        return types.SimpleNamespace(close=lambda: made.append("closed"))
+
+    monkeypatch.setattr(drv, "linux_new_socket", new_socket)
+    assert drv.linux_kernel_has_bluetooth() is (err is None)
+    if err is None:
+        assert made == [(socket.SOCK_STREAM, btsock.BTPROTO_RFCOMM), "closed"]
+
+
+def test_linux_when_the_headphones_hang_up(linux, capsys):
+    # they read the handshake, then close the channel instead of answering
+    linux.serve(lambda raw: linux.theirs.shutdown(socket.SHUT_RDWR) or b"")
+    assert drv.main(["status"]) == 2
+    assert capsys.readouterr().err == (
+        f"error: the headphones closed the control channel\n  hint: {hints.timeout()}\n"
+    )

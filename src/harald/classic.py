@@ -1,14 +1,15 @@
 """Bluetooth classic (rfcomm): channel rules, and arm-gated sessions over a backend.
 
-The rules are pure functions over the service records a backend reads from the mac's
-sdp cache. A channel is protected if any record on it lists a standard profile
+The rules are pure functions over the gadget's service records, as a backend reads
+them over sdp. A channel is protected if any record on it lists a standard profile
 (hands-free, headset, obex, iap2 and the like); harald never opens one. A channel is
 firmware-update class if any record on it lists a `DFU_UUIDS` member, so writes to it
 need `harald arm --allow-dfu`, as for ble.
 
 The async api (`paired_devices`, `services`, `send`, `listen`) runs a synchronous
 `Backend` through `asyncio.to_thread`. Every `send` message spends one arm write. A
-`BackendError` never leaves this module: it becomes a `HaraldError` with a hint.
+`BackendError` never leaves this module: it becomes a `HaraldError` with a hint,
+worded for the platform by `harald.hints`.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Protocol
 
+from harald import hints
+
 # normalize_uuid is re-exported: classic.normalize_uuid is the same function the
 # write gate uses, so classification here and the firmware-update check agree.
 from harald.arm import (
@@ -35,7 +38,6 @@ from harald.arm import (
     live_grant,
     normalize_uuid,
 )
-from harald.ble import BLUETOOTH_HINT
 from harald.errors import (
     BluetoothUnavailable,
     DeviceNotFound,
@@ -201,8 +203,8 @@ def _channel_number(service: str) -> int | None:
 class BackendError(Exception):
     """A backend failure, by code. `classic` maps each code to a HaraldError with a hint.
 
-    Codes: unsupported, bluetooth_off, not_paired, not_connected, stuck, busy,
-    timeout, failed.
+    Codes: unsupported, bluetooth_off, permission, not_paired, pairing, not_connected,
+    stuck, busy, timeout, failed.
     """
 
     def __init__(self, code: str, detail: str = "") -> None:
@@ -253,19 +255,26 @@ class SendResult:
     stopped: str = ""  # why sending stopped early, if it did
 
 
-_mac_backend: Backend | None = None
+_backend: Backend | None = None
 
 
 def default_backend() -> Backend:
-    """The mac's backend, made once per process; anywhere else, BackendError."""
-    global _mac_backend
-    if sys.platform != "darwin":
+    """This platform's backend, made once per process: IOBluetooth on a mac, bluez
+    and kernel sockets on linux; anywhere else, BackendError("unsupported")."""
+    global _backend
+    if sys.platform not in ("darwin", "linux"):
         raise BackendError("unsupported")
-    if _mac_backend is None:
-        from harald.classic_mac import MacBackend  # pyobjc is only imported on a mac
+    if _backend is None:
+        # pyobjc is only imported on a mac, dbus-fast only on linux
+        if sys.platform == "darwin":
+            from harald.classic_mac import MacBackend
 
-        _mac_backend = MacBackend()
-    return _mac_backend
+            _backend = MacBackend()
+        else:
+            from harald.classic_linux import LinuxBackend
+
+            _backend = LinuxBackend()
+    return _backend
 
 
 async def paired_devices(*, backend: Backend | None = None) -> list[ClassicDevice]:
@@ -459,42 +468,40 @@ def _backend_errors(address: str, channel: int | None = None) -> Iterator[None]:
 def _mapped(exc: BackendError, address: str, channel: int | None) -> HaraldError:
     code = exc.code
     if code == "unsupported":
-        return HaraldError(
-            "bluetooth classic is mac-only in this version",
-            hint="use a mac, or the bluetooth le tools",
-        )
+        message, hint = hints.unsupported_classic()
+        return HaraldError(message, hint=hint)
     if code == "bluetooth_off":
         return BluetoothUnavailable(
-            "bluetooth is off or not allowed for this app", hint=BLUETOOTH_HINT
+            hints.bluetooth_off_message(), hint=hints.bluetooth_off()
+        )
+    if code == "permission":
+        return BluetoothUnavailable(
+            "permission denied for bluetooth", hint=hints.permission()
         )
     if code == "not_paired":
         return DeviceNotFound(
-            f"{address} is not paired with this mac",
-            hint="pair it in system settings > bluetooth, "
-            "then run: harald classic devices",
+            f"{address} is not paired with {hints.here()}", hint=hints.pair(address)
+        )
+    if code == "pairing":
+        return DeviceNotFound(
+            f"{address} rejected {hints.here()}'s pairing key",
+            hint=hints.repair(address),
         )
     if code == "not_connected":
-        return DeviceNotFound(
-            f"{address} is not connected",
-            hint="turn it on and connect it to this mac in system settings > bluetooth",
-        )
+        return DeviceNotFound(f"{address} is not connected", hint=hints.connect())
     if code == "stuck":
         return HaraldError(
-            f"the mac would not open a channel to {address}",
-            hint="the mac's bluetooth is stuck: turn bluetooth off and on "
-            "in the menu bar, then try again",
+            f"{hints.machine()} would not open a channel to {address}",
+            hint=hints.stuck(),
         )
-    if code == "busy":
+    if code == "busy":  # with no channel, the sdp query's connect was busy
+        busy = address if channel is None else f"channel {channel} on {address}"
         return HaraldError(
-            f"channel {channel} on {address} is busy",
+            f"{busy} is busy",
             hint="close the vendor app on your phone, "
             "or turn the phone's bluetooth off",
         )
     if code == "timeout":
-        return HaraldError(
-            f"{address} stopped answering",
-            hint="move closer and try again; if it keeps happening, "
-            "turn the mac's bluetooth off and on",
-        )
+        return HaraldError(f"{address} stopped answering", hint=hints.timeout())
     # "failed", and any code this module does not know
     return HaraldError(f"bluetooth error: {exc.detail or code}")

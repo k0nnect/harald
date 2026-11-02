@@ -156,6 +156,45 @@ def _classic_branch(agent: str) -> str:
     return " ".join(branch.split())
 
 
+def test_the_human_runs_the_bluetooth_scan_that_spots_a_classic_gadget():
+    # `bluetoothctl scan on` never ends by itself, so it is never the agent's to run
+    for agent in PLAYBOOK_AGENTS:
+        step = _first_step(playbook_path(agent).read_text(encoding="utf-8"))
+        assert "when the human runs `bluetoothctl scan on`" in step, agent
+        assert "in `bluetoothctl scan on`" not in step, agent
+
+
+def test_classic_pairing_covers_a_mac_and_linux():
+    for agent in PLAYBOOK_AGENTS:
+        branch = _classic_branch(agent)
+        assert "on a mac or linux" in branch, agent
+        assert "on a mac only" not in " ".join(_method(agent).split()), agent
+        step = branch[branch.index("1. pair the gadget") : branch.index("2. capture")]
+        assert "system settings > bluetooth" in step, agent
+        # the order bluez needs: pairable first, or the bond is gone after a disconnect
+        steps = [
+            step.index(f"`bluetoothctl {command}`")
+            for command in (
+                "pairable on",
+                "scan on",
+                "pair <address>",
+                "trust <address>",
+            )
+        ]
+        assert steps == sorted(steps), agent
+        assert "`bluetoothctl remove <address>`" in step, agent
+        assert "in their own terminal" in step, agent
+
+
+def test_never_asks_for_allow_dfu():
+    # firmware-update channels stay blocked; the method only ever forbids the flag
+    for agent in PLAYBOOK_AGENTS:
+        method = " ".join(_method(agent).split())
+        mentions = method.split("`--allow-dfu`")[:-1]
+        assert mentions, agent
+        assert all(m.endswith("never ask for ") for m in mentions), agent
+
+
 def test_short_listen_still_covers_the_last_reply():
     # short listens suit acks, but a reply that lands after the channel closes is lost
     for agent in PLAYBOOK_AGENTS:

@@ -385,6 +385,7 @@ source = { editable = "." }
 dependencies = [
     { name = "bleak" },
     { name = "cryptography" },
+    { name = "dbus-fast", marker = "sys_platform == 'linux'" },
     { name = "mcp" },
     { name = "pyobjc-framework-iobluetooth", marker = "sys_platform == 'darwin'" },
 ]
@@ -401,6 +402,7 @@ dev = [
 requires-dist = [
     { name = "bleak", specifier = ">=3.0" },
     { name = "cryptography", specifier = ">=44" },
+    { name = "dbus-fast", marker = "sys_platform == 'linux'", specifier = ">=2" },
     { name = "mcp", specifier = ">=2.3" },
     { name = "pyobjc-framework-iobluetooth", marker = "sys_platform == 'darwin'", specifier = ">=11" },
 ]

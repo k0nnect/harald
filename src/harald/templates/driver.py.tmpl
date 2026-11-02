@@ -125,6 +125,23 @@ async def send(address: str, payload: bytes) -> str:
 $cli_code
 
 
+def bluetooth_off() -> tuple[str, str]:
+    """The error and hint for bluetooth that is off or out of reach, for this os."""
+    if sys.platform == "linux":
+        return (
+            "bluetooth is off or bluetoothd is not running",
+            "turn bluetooth on with bluetoothctl power on (first rfkill unblock "
+            "bluetooth if it is blocked); bluetoothd must be running: "
+            "systemctl status bluetooth, and if it is disabled, "
+            "sudo systemctl enable --now bluetooth",
+        )
+    return (
+        "bluetooth is off or not allowed for this app",
+        "turn bluetooth on and allow your terminal app in "
+        "system settings > privacy & security > bluetooth",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _function, params = COMMANDS[args.command]
@@ -135,11 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     except DriverError as exc:
         return fail(exc.message, exc.hint)
     except BleakBluetoothNotAvailableError:
-        return fail(
-            "bluetooth is off or not allowed for this app",
-            "turn bluetooth on and allow your terminal app in "
-            "system settings > privacy & security > bluetooth",
-        )
+        return fail(*bluetooth_off())
     except (BleakError, TimeoutError) as exc:
         return fail(
             f"bluetooth error: {str(exc).lower() or type(exc).__name__.lower()}",

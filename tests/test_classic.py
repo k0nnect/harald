@@ -188,68 +188,153 @@ async def test_listen_needs_no_arm():
     assert live_grant(XM5_ADDRESS) is None
 
 
-@pytest.mark.parametrize(
-    ("code", "error", "message", "hint"),
-    [
+# every code's error on a mac: the 0.2 text exactly, but for unsupported (new in
+# 0.2.2) and the two codes linux added, permission and pairing
+MAC_ERRORS = {
+    "unsupported": (
+        HaraldError,
+        "bluetooth classic needs pyobjc's iobluetooth",
+        "uv tool install --reinstall harald",
+    ),
+    "bluetooth_off": (
+        BluetoothUnavailable,
+        "bluetooth is off or not allowed for this app",
         (
-            "unsupported",
-            HaraldError,
-            "bluetooth classic is mac-only in this version",
-            "use a mac, or the bluetooth le tools",
+            "turn bluetooth on and allow your terminal app in "
+            "system settings > privacy & security > bluetooth"
         ),
+    ),
+    "permission": (
+        BluetoothUnavailable,
+        "permission denied for bluetooth",
+        "allow your terminal app in system settings > privacy & security > bluetooth",
+    ),
+    "not_paired": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} is not paired with this mac",
+        "pair it in system settings > bluetooth, then run: harald classic devices",
+    ),
+    "pairing": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} rejected this mac's pairing key",
+        "forget it in system settings > bluetooth and pair it again",
+    ),
+    "not_connected": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} is not connected",
+        "turn it on and connect it to this mac in system settings > bluetooth",
+    ),
+    "stuck": (
+        HaraldError,
+        f"the mac would not open a channel to {XM5_ADDRESS}",
         (
-            "bluetooth_off",
-            BluetoothUnavailable,
-            "bluetooth is off or not allowed for this app",
-            "system settings > privacy & security > bluetooth",
+            "the mac's bluetooth is stuck: turn bluetooth off and on "
+            "in the menu bar, then try again"
         ),
+    ),
+    "busy": (
+        HaraldError,
+        f"channel 9 on {XM5_ADDRESS} is busy",
+        "close the vendor app on your phone, or turn the phone's bluetooth off",
+    ),
+    "timeout": (
+        HaraldError,
+        f"{XM5_ADDRESS} stopped answering",
         (
-            "not_paired",
-            DeviceNotFound,
-            f"{XM5_ADDRESS} is not paired with this mac",
-            "then run: harald classic devices",
+            "move closer and try again; if it keeps happening, "
+            "turn the mac's bluetooth off and on"
         ),
-        (
-            "not_connected",
-            DeviceNotFound,
-            f"{XM5_ADDRESS} is not connected",
-            "connect it to this mac in system settings > bluetooth",
-        ),
-        (
-            "stuck",
-            HaraldError,
-            f"the mac would not open a channel to {XM5_ADDRESS}",
-            "turn bluetooth off and on in the menu bar",
-        ),
-        (
-            "busy",
-            HaraldError,
-            f"channel 9 on {XM5_ADDRESS} is busy",
-            "close the vendor app on your phone",
-        ),
-        (
-            "timeout",
-            HaraldError,
-            f"{XM5_ADDRESS} stopped answering",
-            "move closer and try again",
-        ),
-        ("failed", HaraldError, "bluetooth error: kIOReturnNoMemory", ""),
-    ],
-)
-async def test_backend_errors_map_to_hints(code, error, message, hint):
+    ),
+    "failed": (HaraldError, "bluetooth error: kIOReturnNoMemory", ""),
+}
+
+# on linux: the message exactly, and a piece of the hint
+LINUX_ERRORS = {
+    "unsupported": (
+        HaraldError,
+        "this linux has no bluetooth support",
+        "containers and wsl usually don't",
+    ),
+    "bluetooth_off": (
+        BluetoothUnavailable,
+        "bluetooth is off or bluetoothd is not running",
+        "bluetoothctl power on",
+    ),
+    "permission": (
+        BluetoothUnavailable,
+        "permission denied for bluetooth",
+        "bluetooth group",
+    ),
+    "not_paired": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} is not paired with this computer",
+        "bluetoothctl scan on until the gadget shows up",
+    ),
+    "pairing": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} rejected this computer's pairing key",
+        f"bluetoothctl remove {XM5_ADDRESS}",
+    ),
+    "not_connected": (
+        DeviceNotFound,
+        f"{XM5_ADDRESS} is not connected",
+        "disconnect it from your phone",
+    ),
+    "stuck": (
+        HaraldError,
+        f"this computer would not open a channel to {XM5_ADDRESS}",
+        "sudo systemctl restart bluetooth",
+    ),
+    "busy": (
+        HaraldError,
+        f"channel 9 on {XM5_ADDRESS} is busy",
+        "close the vendor app on your phone",
+    ),
+    "timeout": (
+        HaraldError,
+        f"{XM5_ADDRESS} stopped answering",
+        "sudo systemctl restart bluetooth",
+    ),
+    "failed": (HaraldError, "bluetooth error: kIOReturnNoMemory", ""),
+}
+
+
+@pytest.mark.parametrize("code", list(MAC_ERRORS))
+async def test_backend_errors_map_to_hints_on_a_mac(on_mac, code):
+    error, message, hint = MAC_ERRORS[code]
     backend = FakeBackend(open_error=BackendError(code, "kIOReturnNoMemory"))
     with pytest.raises(HaraldError) as e:
         await listen(XM5_ADDRESS, "9", 1.0, backend=backend)
     assert type(e.value) is error
     assert e.value.message == message
-    assert hint in e.value.hint
+    assert e.value.hint == hint
 
     arm(XM5_ADDRESS, writes=5)
     with pytest.raises(HaraldError) as e:
         await send(XM5_ADDRESS, "9", [M1], backend=backend)
     assert type(e.value) is error
     assert e.value.message == message
+    assert e.value.hint == hint
     assert backend.opened == [(XM5_ADDRESS, 9)] * 2
+
+
+@pytest.mark.parametrize("code", list(LINUX_ERRORS))
+async def test_backend_errors_map_to_hints_on_linux(on_linux, code):
+    error, message, hint = LINUX_ERRORS[code]
+    backend = FakeBackend(open_error=BackendError(code, "kIOReturnNoMemory"))
+    with pytest.raises(HaraldError) as e:
+        await listen(XM5_ADDRESS, "9", 1.0, backend=backend)
+    assert type(e.value) is error
+    assert e.value.message == message
+    assert hint in e.value.hint
+    for text in (e.value.message, e.value.hint):
+        assert "mac" not in text and "system settings" not in text
+
+
+def test_every_code_is_mapped_on_both_platforms():
+    codes = classic.BackendError.__doc__.split("Codes:")[1]
+    documented = {code.strip(" .\n") for code in codes.split(",")}
+    assert documented == set(MAC_ERRORS) == set(LINUX_ERRORS)
 
 
 async def test_unknown_backend_code_is_a_bluetooth_error():
@@ -338,24 +423,25 @@ async def test_hyphen_address_reaches_backend_in_colon_form():
     assert result.writes_left == 4
 
 
-async def test_default_backend_off_mac(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
+async def test_default_backend_off_mac_and_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delitem(sys.modules, "harald.classic_mac", raising=False)
     with pytest.raises(BackendError) as raw:
         classic.default_backend()
     assert raw.value.code == "unsupported"
 
-    with pytest.raises(HaraldError, match="mac-only") as e:
+    needs = "^bluetooth classic needs macos or linux$"
+    with pytest.raises(HaraldError, match=needs) as e:
         await paired_devices()
-    assert e.value.hint == "use a mac, or the bluetooth le tools"
-    with pytest.raises(HaraldError, match="mac-only"):
+    assert e.value.hint == "use a mac or a linux machine, or the bluetooth le tools"
+    with pytest.raises(HaraldError, match=needs):
         await services(XM5_ADDRESS)
-    with pytest.raises(HaraldError, match="mac-only"):
+    with pytest.raises(HaraldError, match=needs):
         await listen(XM5_ADDRESS, "9", 1.0)
     assert "harald.classic_mac" not in sys.modules
 
 
-async def test_backend_error_after_a_write_keeps_the_partial_send():
+async def test_backend_error_after_a_write_keeps_the_partial_send(on_mac):
     arm(XM5_ADDRESS, writes=5)
     backend = FakeBackend(
         on_open=[HELLO],

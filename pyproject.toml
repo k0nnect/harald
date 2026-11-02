@@ -15,6 +15,7 @@ dependencies = [
     "mcp>=2.3",
     "cryptography>=44",
     "pyobjc-framework-IOBluetooth>=11; sys_platform == 'darwin'",
+    "dbus-fast>=2; sys_platform == 'linux'",
 ]
 
 [project.urls]

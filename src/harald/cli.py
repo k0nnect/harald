@@ -9,7 +9,7 @@ command or write any file on the machine. Expected failures print
 traceback.
 
 The ble backends (`scanner_cls`, `client_cls`), the classic backend
-(`classic_backend`; None means the mac's) and the driver runner (`runner`) are
+(`classic_backend`; None means the platform's) and the driver runner (`runner`) are
 module-level hooks so tests can swap in fakes; they are looked up on every call.
 IOBluetooth calls back only on the main thread, so on a mac each `harald classic`
 command runs its asyncio work under `classic_mac.run_main`.
@@ -31,7 +31,7 @@ from typing import Any, TypeVar
 
 from bleak.exc import BleakError
 
-from harald import __version__, arm, ble, classic, library, workspace
+from harald import __version__, arm, ble, classic, hints, library, workspace
 from harald.apk import analyze_apk
 from harald.capture.timeline import build_timeline, render
 from harald.errors import HaraldError, LibraryError
@@ -208,7 +208,7 @@ def _run_classic(work: Callable[[], Coroutine[Any, Any, T]]) -> T:
 def _classic_devices(args: argparse.Namespace) -> int:
     devices = _run_classic(lambda: classic.paired_devices(backend=classic_backend))
     if not devices:
-        print("no paired classic devices; pair one in system settings > bluetooth")
+        print(f"no paired classic devices; {hints.pair_one()}")
         return 0
     width = max(len("address"), *(len(d.address) for d in devices))
     print(f"{'address':<{width}}  connected  name")
@@ -525,7 +525,7 @@ def _build_parser() -> argparse.ArgumentParser:
     command(
         "devices",
         _classic_devices,
-        "list the bluetooth classic devices paired with this mac",
+        f"list the bluetooth classic devices paired with {hints.here()}",
         classic_sub,
     )
     services = command(
@@ -538,7 +538,7 @@ def _build_parser() -> argparse.ArgumentParser:
     services.add_argument(
         "--refresh",
         action="store_true",
-        help="ask the device again instead of trusting the mac's cache",
+        help=f"ask the device again instead of trusting {hints.machine()}'s cache",
     )
     send = command(
         "send",

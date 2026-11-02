@@ -289,6 +289,25 @@ async def test_instructions_mention_classic_and_no_arm_tool():
     assert send_doc == send_doc.lower()
 
 
+async def test_classic_tool_descriptions_fit_a_mac_and_linux():
+    # docstrings are fixed when the server is built, so they name no platform
+    tools = {tool.name: tool for tool in await build_server().list_tools()}
+    classic_tools = (
+        "classic_devices",
+        "classic_services",
+        "classic_send",
+        "classic_listen",
+    )
+    for name in classic_tools:
+        doc = " ".join(tools[name].description.split())
+        assert "mac" not in doc
+        assert "system settings" not in doc
+    devices_doc = " ".join(tools["classic_devices"].description.split())
+    assert "paired with this computer" in devices_doc
+    services_doc = " ".join(tools["classic_services"].description.split())
+    assert "records from this computer's cache" in services_doc
+
+
 async def test_classic_devices_shape():
     backend = FakeBackend(devices=[ClassicDevice(XM5_ADDRESS, "WH-1000XM5", True)])
     server = build_server(classic_backend=backend)

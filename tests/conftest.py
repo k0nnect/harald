@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from fakes import FakeClient, FakeScanner
 
@@ -21,3 +23,15 @@ def harald_home(tmp_path, monkeypatch):
 @pytest.fixture
 def home(harald_home):
     return harald_home
+
+
+@pytest.fixture
+def on_mac(monkeypatch):
+    """Word hints as on a mac, whatever the tests run on (ci runs linux too)."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+
+@pytest.fixture
+def on_linux(monkeypatch):
+    """Word hints as on linux."""
+    monkeypatch.setattr(sys, "platform", "linux")

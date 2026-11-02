@@ -50,8 +50,9 @@ the playbook leaves your agent's work in `harald-work/<slug>/` (`protocol.md` an
 1. set `ADDRESS_HINT` in `driver.py` to `""`, so it scans instead of using your own
    unit's address. the scan looks for the service uuid, and for a name starting with
    `NAME_HINT` when that is set, for gadgets that don't advertise their service. a
-   classic driver looks through the mac's paired devices instead: for a name starting
-   with `NAME_HINT`, else for the one device that lists the service uuid.
+   classic driver looks through the devices paired with this computer instead, on a
+   mac or linux: for a name starting with `NAME_HINT`, else for the one device that
+   lists the service uuid.
 2. from your checkout, run `uv run harald drive <slug> <command>` against the real
    gadget, using values the vendor app's capture never contained. replaying captured
    bytes does not count as decoded.

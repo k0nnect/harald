@@ -49,13 +49,14 @@ follow the steps in order. nothing here is specific to one device.
 1. check harald's `devices/` library and known prior art before anything else.
    ask the human what the gadget is and to switch it on. call `scan` to find it and
    `connect` to list its services. a gadget that never shows in `scan` but does show
-   in system settings > bluetooth on the mac is most likely bluetooth classic: follow
-   the classic branch at the end, which changes each step below. call
-   `list_devices`, and `load_device` for any entry whose name or service uuids
-   match. a `decoded` entry means the work is done: the human runs
-   `harald drive <slug> ...` and you stop here. otherwise look for prior art:
-   open-source drivers, integrations or write-ups for the same model or the same
-   vendor app. treat what you find as hypotheses to check in step 6.
+   in system settings > bluetooth on a mac, or on linux when the human runs
+   `bluetoothctl scan on`, is most likely bluetooth classic: follow the classic
+   branch at the end, which changes each step below. call `list_devices`, and
+   `load_device` for any entry whose name or service uuids match. a `decoded` entry
+   means the work is done: the human runs `harald drive <slug> ...` and you stop
+   here. otherwise look for prior art: open-source drivers, integrations or write-ups
+   for the same model or the same vendor app. treat what you find as hypotheses to
+   check in step 6.
 
 2. have the human record the vendor app talking to the gadget.
    a computer cannot overhear phone-to-gadget traffic without extra hardware, so the
@@ -159,26 +160,34 @@ follow the steps in order. nothing here is specific to one device.
 some gadgets, often headphones, speakers and serial gadgets, are controlled over
 bluetooth classic instead of bluetooth le. their vendor app talks to an rfcomm
 channel, a plain byte stream, rather than to gatt characteristics. harald reaches
-them on a mac only, through `classic_devices`, `classic_services`, `classic_send`
-and `classic_listen`. follow the method above with these changes to its steps; the
-rules in "before you start" still hold.
+them on a mac or linux, through `classic_devices`, `classic_services`,
+`classic_send` and `classic_listen`. follow the method above with these changes to
+its steps; the rules in "before you start" still hold.
 
 1. pair the gadget, then list its services.
-   ask the human to pair the gadget in system settings > bluetooth on the mac and to
-   keep it connected there. harald does not search for or pair classic devices, and
-   `scan` only sees bluetooth le. call `classic_devices` for its address and whether
-   it is connected now, then `classic_services` with that address; the human can
-   run `harald classic devices` and `harald classic services <address>` to see the
-   same. each record has a name, its service uuids, an rfcomm channel, and
-   `protected` and `firmware_update` flags. protected channels carry standard
-   profiles, such as hands-free, headset, file transfer (obex), phonebook, messages,
-   sim access, dial-up and apple iap2, and harald never opens them. channels missing
-   from `classic_services` are refused too, and `firmware_update` channels stay
-   blocked; never ask for `--allow-dfu`. what is left is usually a few vendor
-   services, each with its own 128-bit uuid, and the vendor app's control channel
-   is one of them. if the records look empty or out of date, call
-   `classic_services` again with `refresh=true`. then check `list_devices` and prior
-   art as in step 1, matching on the name and on these service uuids.
+   ask the human to pair the gadget. on a mac, they pair it in system settings >
+   bluetooth and keep it connected there. on linux, they run these in their own
+   terminal, in this order: `bluetoothctl pairable on` (without it, bluez makes a
+   bond that is gone after the next disconnect), `bluetoothctl scan on` until the
+   gadget shows up, then `bluetoothctl pair <address>` and
+   `bluetoothctl trust <address>`. a gadget that has forgotten the pairing has to be
+   paired again, on linux after `bluetoothctl remove <address>`; harald's hint says
+   so. harald does not search for or pair classic devices, and `scan` only sees
+   bluetooth le. call `classic_devices` for its address and whether it is connected
+   now, then `classic_services` with that address; the human can run
+   `harald classic devices` and `harald classic services <address>` to see the same.
+   a mac reads the records from its own cache; on linux harald asks the gadget, so
+   it has to be on and in range the first time. each record has a name, its service
+   uuids, an rfcomm channel, and `protected` and `firmware_update` flags. protected
+   channels carry standard profiles, such as hands-free, headset, file transfer
+   (obex), phonebook, messages, sim access, dial-up and apple iap2, and harald never
+   opens them. channels missing from `classic_services` are refused too, and
+   `firmware_update` channels stay blocked; never ask for `--allow-dfu`. what is
+   left is usually a few vendor services, each with its own 128-bit uuid, and the
+   vendor app's control channel is one of them. if the records look empty or out of
+   date, call `classic_services` again with `refresh=true`. then check
+   `list_devices` and prior art as in step 1, matching on the name and on these
+   service uuids.
 
 2. capture the vendor app on an android phone.
    classic captures come from an android phone's btsnoop log. an iphone capture of a
@@ -249,9 +258,9 @@ rules in "before you start" still hold.
    first, and stop to rethink after a few failures. never repeat a command whose
    purpose you don't know; some gadgets take firmware over the same channel. never
    send anything that looks like a firmware update or a reset, even if the app or
-   prior art has it. if the channel keeps failing to open, ask the human to check
-   that the gadget is connected to the mac, then to turn the mac's bluetooth off
-   and on.
+   prior art has it. if the channel keeps failing to open on a mac, ask the human
+   to check that the gadget is connected to the mac, then to turn the mac's
+   bluetooth off and on; on linux, ask them to do what harald's hint says.
 
 7. render a classic driver.
    build the `DriverSpec` as in step 7, with `transport="classic"`, `service_uuid`
@@ -264,9 +273,9 @@ rules in "before you start" still hold.
    waits to print what the gadget sends back; 0 prints nothing. the driver finds the
    gadget by `address_hint`, else by a paired name that starts with `name_hint`,
    else by `service_uuid` when exactly one paired device lists it. it runs on a mac
-   only, with the gadget paired and connected. a rendered driver sends fixed bytes,
-   so it keeps no state: a protocol with changing sequence numbers, acks for the
-   gadget's messages, or a handshake whose reply decides what comes next needs a
-   hand-written driver instead. start from a rendered one and keep its shape: the
-   uv script header, its own small cli, no harald import, and no firmware or reset
-   commands. say in `protocol.md` what state it keeps.
+   or linux, with the gadget paired, and on a mac connected too. a rendered driver
+   sends fixed bytes, so it keeps no state: a protocol with changing sequence
+   numbers, acks for the gadget's messages, or a handshake whose reply decides what
+   comes next needs a hand-written driver instead. start from a rendered one and
+   keep its shape: the uv script header, its own small cli, no harald import, and no
+   firmware or reset commands. say in `protocol.md` what state it keeps.

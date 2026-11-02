@@ -3,29 +3,39 @@
 # dependencies = [
 #     "cryptography>=44",
 #     "pyobjc-framework-IOBluetooth>=11; sys_platform == 'darwin'",
+#     "dbus-fast>=2; sys_platform == 'linux'",
 # ]
 # ///
 """a standalone driver for one bluetooth classic gadget, written by harald.
 
-it has its own command line and does not need harald. it runs on a mac only. run it
-with uv, which installs cryptography and pyobjc's IOBluetooth from the block above:
+it has its own command line and does not need harald. it runs on a mac or linux.
+run it with uv, which installs cryptography, and pyobjc's IOBluetooth on a mac or
+dbus-fast on linux, from the block above:
 
     uv run driver.py --help
     uv run driver.py <command> [values]
 
-the gadget has to be paired with this mac and connected to it. each command opens
-the rfcomm channel that the gadget's service record lists for SERVICE_UUID, writes
-each of INIT_PAYLOADS as it is, then the command's plaintext payload, encrypted when
-CIPHER is set. when REPLY_SECONDS is above 0 it prints what the gadget sent back.
-the channel is closed on every way out. with no --address and no ADDRESS_HINT, it
-takes the paired device whose name starts with NAME_HINT or, when NAME_HINT is empty
-too, the only paired device whose service records list SERVICE_UUID.
+the gadget has to be paired with this computer and, on a mac, connected to it. each
+command opens the rfcomm channel that the gadget's service record lists for
+SERVICE_UUID, writes each of INIT_PAYLOADS as it is, then the command's plaintext
+payload, encrypted when CIPHER is set. when REPLY_SECONDS is above 0 it prints what
+the gadget sent back. the channel is closed on every way out. with no --address and
+no ADDRESS_HINT, it takes the paired device whose name starts with NAME_HINT or,
+when NAME_HINT is empty too, the only paired device whose service records list
+SERVICE_UUID.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
+import ctypes
+import errno
+import os
+import select
+import socket
+import struct
 import sys
 import time
 import types
@@ -201,11 +211,14 @@ def delegate_class(mac: types.SimpleNamespace):
 def open_link(address_hint: str, name_hint: str, service_uuid: str):
     """Open the gadget's rfcomm channel for `service_uuid` and return a MacLink to
     it: write(bytes), read(seconds) -> bytes, close(), and the address it reached.
+    On linux it returns a LinuxLink, from the linux link below, instead.
 
     The gadget is the paired device at `address_hint` or, when that is empty, the
     one `pick_device` finds. IOBluetooth calls back only on the main thread's run
     loop, so this runs on the main thread and pumps that run loop while it waits.
     """
+    if sys.platform == "linux":
+        return linux_open_link(address_hint, name_hint, service_uuid)
     mac = mac_modules()
     paired = mac.IOBluetooth.IOBluetoothDevice.pairedDevices()
     if paired is None:
@@ -346,6 +359,11 @@ class MacLink:
         with contextlib.suppress(Exception):
             self.channel.closeChannel()
             self.pump_until(lambda: self.delegate.closed, CLOSE_SECONDS)
+
+
+# --- linux's rfcomm -------------------------------------------------------------
+
+$linux_code
 
 
 # --- the command line -----------------------------------------------------------

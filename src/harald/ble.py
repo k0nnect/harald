@@ -3,6 +3,10 @@
 The bleak classes are injectable (`scanner_cls`, `client_cls`) so tests and front ends
 can swap in fakes. Every write spends the human's arm budget before it reaches the
 device, keyed by the characteristic's real parent service.
+
+On linux bleak asks bluez over the system d-bus. With no system bus, its connect fails
+with a bare FileNotFoundError or ConnectionRefusedError: harald then asks the kernel
+(`btsock.kernel_has_bluetooth`) whether there is any bluetooth here at all.
 """
 
 from __future__ import annotations
@@ -15,26 +19,37 @@ from dataclasses import dataclass
 from bleak import BleakClient, BleakScanner
 from bleak.exc import (
     BleakBluetoothNotAvailableError,
+    BleakDBusError,
     BleakDeviceNotFoundError,
     BleakError,
 )
 from bleak.uuids import normalize_uuid_str
 
+from harald import bluez, btsock, hints
 from harald.arm import consume_write
 from harald.errors import BluetoothUnavailable, DeviceNotFound, HaraldError
 
-BLUETOOTH_HINT = (
-    "turn bluetooth on and allow your terminal app in "
-    "system settings > privacy & security > bluetooth"
-)
 NOT_FOUND_HINT = (
     "move closer, close the vendor app on your phone "
     "(gadgets accept one connection), then run harald scan"
 )
-_UNAVAILABLE_WORDS = ("turned off", "not authorized", "unauthorized")
+_UNAVAILABLE_WORDS = (
+    "turned off",
+    "not authorized",
+    "unauthorized",
+    "no bluetooth adapters found",
+)
+# bluez's own d-bus errors, which bleak raises on linux as BleakDBusError
+_NOT_READY = "org.bluez.Error.NotReady"  # the adapter is off
+_DENIED = ("org.bluez.Error.NotPermitted", "org.bluez.Error.NotAuthorized")
+_IN_PROGRESS = "org.bluez.Error.InProgress"
 # what a failing cleanup (stop_notify, disconnect) may raise. it is suppressed so it
 # never replaces the result or the error that came before it.
 CLEANUP_ERRORS = (BleakError, OSError, TimeoutError)
+# no system d-bus on linux: no socket where it should be, or no one listening on it
+_NO_BUS = (FileNotFoundError, ConnectionRefusedError)
+# what scan and connect turn into harald errors when `_friendly_error` knows them
+_MAPPED = (BleakError, TimeoutError, *_NO_BUS)
 
 
 @dataclass
@@ -63,7 +78,7 @@ async def scan(timeout: float = 5.0, *, scanner_cls=BleakScanner) -> list[Device
     """Scan for `timeout` seconds; return what was seen, strongest signal first."""
     try:
         found = await scanner_cls.discover(timeout=timeout, return_adv=True)
-    except (BleakError, TimeoutError) as exc:
+    except _MAPPED as exc:
         friendly = _friendly_error(exc, None)
         if friendly is None:
             raise
@@ -93,7 +108,7 @@ class Session:
     async def connect(self) -> None:
         try:
             await self._client.connect()
-        except (BleakError, TimeoutError) as exc:
+        except _MAPPED as exc:
             friendly = _friendly_error(exc, self.address)
             if friendly is None:
                 raise
@@ -180,15 +195,48 @@ class Session:
 
 
 def _friendly_error(exc: Exception, address: str | None) -> HaraldError | None:
-    """Map a bleak or timeout error to a harald error with a hint, or None if unknown."""
+    """Map a bleak, timeout or no-bus error to a harald error with a hint, or None
+    if unknown.
+
+    On linux a failed bluez call arrives as a BleakDBusError, read by its d-bus name
+    before its words: bluez's NotAuthorized may come with the words "not authorized".
+    A FileNotFoundError or ConnectionRefusedError means no system bus only on linux;
+    off linux it passes through as it was.
+    """
+    if isinstance(exc, _NO_BUS):
+        return _no_bus() if hints.is_linux() else None
+    name = exc.dbus_error if isinstance(exc, BleakDBusError) else ""
+    if name in _DENIED or name == bluez.ACCESS_DENIED:
+        return BluetoothUnavailable(
+            "permission denied for bluetooth", hint=hints.permission()
+        )
+    if name == _IN_PROGRESS:
+        return HaraldError(
+            "bluetooth is busy with another operation",
+            hint="wait a moment, then try again",
+        )
     text = str(exc).lower()
-    if isinstance(exc, BleakBluetoothNotAvailableError) or any(
-        word in text for word in _UNAVAILABLE_WORDS
+    if (
+        isinstance(exc, BleakBluetoothNotAvailableError)
+        or name == _NOT_READY
+        or bluez.not_running(name)
+        or any(word in text for word in _UNAVAILABLE_WORDS)
     ):
         return BluetoothUnavailable(
-            "bluetooth is off or not allowed for this app", hint=BLUETOOTH_HINT
+            hints.bluetooth_off_message(), hint=hints.bluetooth_off()
         )
     if isinstance(exc, (BleakDeviceNotFoundError, TimeoutError)):
         message = f"device {address} not found" if address else "no device found"
         return DeviceNotFound(message, hint=NOT_FOUND_HINT)
     return None
+
+
+def _no_bus() -> BluetoothUnavailable:
+    """No system d-bus on linux, so no bluez: bluetooth is off or bluetoothd is not
+    running, unless the kernel has no bluetooth at all (a container, wsl)."""
+    if not btsock.kernel_has_bluetooth():
+        message, hint = hints.no_bluetooth_support()
+        return BluetoothUnavailable(message, hint=hint)
+    return BluetoothUnavailable(
+        hints.bluetooth_off_message(), hint=hints.bluetooth_off()
+    )

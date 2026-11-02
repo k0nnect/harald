@@ -169,7 +169,7 @@ def test_capture_open_help_names_the_channel_filter(capsys):
     assert "--channel n only rfcomm events on this channel, e.g. 9" in help_text
 
 
-def test_bluetooth_off_exits_2_with_hint(capsys):
+def test_bluetooth_off_exits_2_with_hint(on_mac, capsys):
     FakeClient.reset(connect_error=BleakError("Bluetooth device is turned off"))
     assert cli.main(["connect", "AA-11"]) == 2
     captured = capsys.readouterr()
@@ -357,11 +357,45 @@ def test_classic_devices_prints_a_table(monkeypatch, capsys):
     ]
 
 
-def test_classic_devices_with_none_paired(capsys):
+def test_classic_devices_with_none_paired(on_mac, capsys):
     assert cli.main(["classic", "devices"]) == 0
     assert capsys.readouterr().out == (
         "no paired classic devices; pair one in system settings > bluetooth\n"
     )
+
+
+def test_classic_devices_with_none_paired_on_linux(on_linux, capsys):
+    assert cli.main(["classic", "devices"]) == 0
+    assert capsys.readouterr().out == (
+        "no paired classic devices; pair one: bluetoothctl pairable on, "
+        "bluetoothctl scan on until the gadget shows up, "
+        "then bluetoothctl pair <address> and bluetoothctl trust <address>\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("platform", "devices_help", "refresh_help"),
+    [
+        (
+            "darwin",
+            "list the bluetooth classic devices paired with this mac",
+            "ask the device again instead of trusting the mac's cache",
+        ),
+        (
+            "linux",
+            "list the bluetooth classic devices paired with this computer",
+            "ask the device again instead of trusting this computer's cache",
+        ),
+    ],
+)
+def test_classic_help_names_the_platform(
+    monkeypatch, capsys, platform, devices_help, refresh_help
+):
+    monkeypatch.setattr(sys, "platform", platform)
+    assert cli.main(["classic", "--help"]) == 0
+    assert devices_help in " ".join(capsys.readouterr().out.split())
+    assert cli.main(["classic", "services", "--help"]) == 0
+    assert refresh_help in " ".join(capsys.readouterr().out.split())
 
 
 def test_classic_services_prints_one_line_per_record(monkeypatch, capsys):

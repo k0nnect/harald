@@ -5,10 +5,11 @@ Once an agent has verified a gadget's commands, it fills a `DriverSpec` and rend
 from `string.Template` files in the `templates/` folder beside this module: the
 `_classic` ones for a bluetooth classic gadget. Code both drivers share (payloads,
 encryption, the command line) lives once, in the `driver_payload` and `driver_cli`
-fragments, which each driver template takes in. The driver is one self-contained
-script: inline script metadata, so that `uv run driver.py ...` installs bleak (or,
-for classic, pyobjc's IOBluetooth) and cryptography, its own argparse cli, and no
-import of harald.
+fragments, which each driver template takes in. A classic driver also takes in the
+`linux_link` fragment as it is: its linux path, which `devices/` drivers copy. The
+driver is one self-contained script: inline script metadata, so that `uv run
+driver.py ...` installs bleak (or, for classic, pyobjc's IOBluetooth on a mac and
+dbus-fast on linux) and cryptography, its own argparse cli, and no import of harald.
 """
 
 from __future__ import annotations
@@ -128,6 +129,7 @@ def render_driver(spec: DriverSpec) -> str:
             values,
             init_payloads=_literal(tuple(spec.init_payloads)),
             reply_seconds=repr(spec.reply_seconds),
+            linux_code=linux_link(),
         )
     return _template("driver.py.tmpl").substitute(
         values, write_char_uuid=_literal(spec.write_char_uuid)
@@ -204,6 +206,14 @@ def _classic_reply(spec: DriverSpec) -> str:
         f"after the command, the driver waits {spec.reply_seconds:g} s, then prints "
         "everything\nthe gadget sent since the channel opened as `reply: <hex>`."
     )
+
+
+def linux_link() -> str:
+    """The linux link every classic driver carries: `linux_link.py.tmpl` as it is,
+    without its final newline. A hand-written classic driver in devices/ keeps a copy
+    of it, which a test holds to this."""
+    path = files("harald") / "templates" / "linux_link.py.tmpl"
+    return path.read_text(encoding="utf-8").removesuffix("\n")
 
 
 def _fragment(name: str, **values: str) -> str:

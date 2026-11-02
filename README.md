@@ -42,7 +42,8 @@ uv tool install harald
 
 that puts `harald` on your path for the commands below. if your shell can't find it,
 run `uv tool update-shell`. to try harald without installing it, run
-`uvx harald --help`: uvx fetches harald and runs it once. tested on mac.
+`uvx harald --help`: uvx fetches harald and runs it once. tested on mac; linux is
+experimental, see below.
 
 the first time harald scans, macos asks whether your terminal app may use bluetooth.
 allow it. if you missed the prompt, turn it on in system settings › privacy & security
@@ -68,6 +69,30 @@ harald drive <slug> <command>        run a library device's driver
 
 `harald --help` lists the rest, and [bluetooth classic](#五-bluetooth-classic) has
 the commands for classic gadgets.
+
+**linux (experimental)**
+
+harald works on linux too, for bluetooth le and classic, through bluez. you need bluez
+5.50 or newer with bluetoothd running, and your user in the `bluetooth` group: log out
+and back in after adding it. harald needs no root, and there is no permission prompt
+as on macos, but it can't reach bluetooth from inside a sandbox such as snap or
+flatpak. the install above works as it is, on uv's own python too. if harald says
+bluetooth is off, run `bluetoothctl power on`, with `rfkill unblock bluetooth` first
+if it is blocked, and check bluetoothd with `systemctl status bluetooth`.
+
+pair a classic gadget in your own terminal, in this order:
+
+1. `bluetoothctl pairable on`. without it, bluez makes a bond that is gone after the
+   next disconnect.
+2. `bluetoothctl scan on`, until the gadget shows up.
+3. `bluetoothctl pair <address>`.
+4. `bluetoothctl trust <address>`.
+
+if harald says the gadget has forgotten the pairing, run
+`bluetoothctl remove <address>` and pair it again.
+
+linux is experimental: tested against an emulated gadget, not yet on real hardware.
+if you run it on linux, tell us how it went in an issue.
 
 ## 三 devices
 
@@ -165,14 +190,15 @@ name is the `id=` part of the app's play store address.
 
 some gadgets, often headphones and speakers, are controlled over bluetooth classic
 instead of bluetooth le: the vendor app talks to an rfcomm channel, a plain byte
-stream. harald reaches those too, on a mac only for now; bluetooth le works as before.
+stream. harald reaches those too, on a mac or linux; bluetooth le works as before.
 
-pair the gadget in system settings > bluetooth first and keep it connected there.
-harald doesn't search for or pair classic gadgets, and `harald scan` only sees
-bluetooth le. classic addresses look like `aa:bb:cc:11:22:33`.
+pair the gadget first: on a mac in system settings > bluetooth, keeping it connected
+there; on linux with `bluetoothctl`, as in [install](#二-install). harald doesn't
+search for or pair classic gadgets, and `harald scan` only sees bluetooth le. classic
+addresses look like `aa:bb:cc:11:22:33`.
 
 ```text
-harald classic devices                         list the gadgets paired with this mac
+harald classic devices                         list the gadgets paired with this computer
 harald classic services <address>              list a gadget's rfcomm services
 harald classic send <address> <service> <hex>  send messages, once you have armed it
 harald classic listen <address> <service>      show what a channel says, sending nothing
@@ -180,12 +206,13 @@ harald capture open <file> --channel n         show one rfcomm channel of a capt
 ```
 
 `<service>` is a service uuid or channel number from `harald classic services`; add
-`--refresh` there when the list looks out of date. `harald classic send` takes one or
-more messages and sends them in order, listening for replies after each one
-(`--listen s`, 2 seconds by default). if the grant runs out or the link fails
-partway, it prints what it sent and received, says why on stderr and exits 1.
-`harald classic listen` sends nothing and listens for `--seconds s` (5 by default).
-either listens for at most 30 seconds at a time.
+`--refresh` there when the list looks out of date. a mac reads that list from its
+own cache; on linux harald asks the gadget itself, so the gadget has to be on and in
+range. `harald classic send` takes one or more messages and sends them in order,
+listening for replies after each one (`--listen s`, 2 seconds by default). if the
+grant runs out or the link fails partway, it prints what it sent and received, says
+why on stderr and exits 1. `harald classic listen` sends nothing and listens for
+`--seconds s` (5 by default). either listens for at most 30 seconds at a time.
 
 like `harald write`, `harald classic send` needs `harald arm <address>` first, and
 every message spends one write from the grant, a query too. harald never opens the

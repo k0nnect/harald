@@ -11,13 +11,13 @@ battery readout and much more; this entry covers only the first three. facts mar
   models use a different uuid, which the xm5 does not serve.
 - the rfcomm channel number comes from the service record for that uuid. a mac that
   has paired with the headphones keeps their service records, so no sdp query is
-  needed. it was channel 9 on the unit seen, but look it up every time; never
-  hardcode it.
-- the headphones must be connected to the mac, as they are for audio. audio keeps
+  needed there; on linux the driver asks the headphones for it over sdp. it was
+  channel 9 on the unit seen, but look it up every time; never hardcode it.
+- on a mac the headphones must be connected, as they are for audio. audio keeps
   playing while the control channel is open (seen: open, talk and close take one
   to two seconds).
 - the phone's sony app may hold the control channel while it is open. close it, or
-  turn the phone's bluetooth off, before driving the headphones from the mac.
+  turn the phone's bluetooth off, before driving the headphones from this computer.
 
 ## framing
 

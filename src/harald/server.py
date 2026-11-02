@@ -115,7 +115,8 @@ def build_server(
     classic_backend: classic.Backend | None = None,
 ) -> MCPServer:
     """An `MCPServer` with every harald tool registered. BLE backends and the classic
-    backend are injectable; with no classic backend, classic uses the mac's."""
+    backend are injectable; with no classic backend, classic uses the platform's
+    backend."""
     mcp = MCPServer("harald", instructions=INSTRUCTIONS, version=__version__)
 
     def tool(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -321,10 +322,10 @@ def build_server(
 
     @tool
     async def classic_devices() -> list[Record] | Failure:
-        """list the bluetooth classic devices paired with this mac.
+        """list the bluetooth classic devices paired with this computer.
 
-        connected says whether each is linked to the mac now. use an address from here
-        with classic_services, classic_send and classic_listen.
+        connected says whether each is linked to this computer now. use an address
+        from here with classic_services, classic_send and classic_listen.
         """
         devices = await classic.paired_devices(backend=classic_backend)
         return [asdict(d) for d in devices]
@@ -333,7 +334,7 @@ def build_server(
     async def classic_services(
         address: str, refresh: bool = False
     ) -> list[Record] | Failure:
-        """list a paired classic device's service records from the mac's sdp cache.
+        """list a paired classic device's service records from this computer's cache.
 
         each record has a name, service-class uuids and an rfcomm channel (null when
         rfcomm cannot reach it). protected channels are standard profiles such as
