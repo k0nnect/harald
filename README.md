@@ -17,9 +17,9 @@
   <a href="#七-contributing-a-device">add your device</a>
 </p>
 
-![a coding agent works out an led strip's protocol with harald, then turns the strip pink](assets/demo.gif)
+![a claude code session uses harald to find a sony wh-1000xm5's control channel over bluetooth classic, is refused until a human arms the headphones, then turns noise cancelling on and reads the battery](assets/demo.gif)
 
-**fig. 1** · claude + harald take an istrip+ strip from unknown to pink in one session.
+**fig. 1** · claude + harald find a sony wh-1000xm5's control channel over bluetooth classic, wait for you to arm it, then turn noise cancelling on. real hardware, sped up.
 
 ## 一 how it works
 
@@ -73,7 +73,6 @@ the commands for classic gadgets.
 
 | device | what harald found | status |
 | :--- | :--- | :--- |
-| istrip+ led strip | being worked out on real hardware | in progress |
 | sony wh-1000xm5 headphones | noise cancelling, ambient and battery over bluetooth classic | decoded |
 | your device | open a pull request with its `device.toml`, `protocol.md` and `driver.py` | wanted |
 
