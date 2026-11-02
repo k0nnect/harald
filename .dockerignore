@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+.superpowers
+docs/superpowers
+harald-work
+dist
+build
+tools
+assets/demo.gif
+scripts/.fonts
+**/__pycache__
+.pytest_cache
+.ruff_cache
+**/.DS_Store

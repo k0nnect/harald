@@ -51,6 +51,20 @@ def test_registry_entry_matches_the_release():
     assert pypi[0]["version"] == harald.__version__
 
 
+def test_glama_builds_the_mcp_server_from_the_lockfile():
+    # glama builds the Dockerfile and starts the server to list its tools
+    dockerfile = (REPO / "Dockerfile").read_text()
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text()
+    uv = dockerfile.split("ghcr.io/astral-sh/uv:", 1)[1].split()[0]
+    assert f'version: "{uv}"' in ci  # the same uv as ci, which wrote uv.lock
+    assert "uv sync --locked --no-dev" in dockerfile
+    assert 'CMD ["harald", "mcp"]' in dockerfile
+    ignored = (REPO / ".dockerignore").read_text().splitlines()
+    assert {".superpowers", "docs/superpowers", ".venv"} <= set(ignored)
+    glama = json.loads((REPO / "glama.json").read_text())
+    assert glama["maintainers"] == ["k0nnect"]
+
+
 def test_readme_carries_the_registry_ownership_comment():
     # the registry reads the pypi description for this line before it lists harald
     lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
