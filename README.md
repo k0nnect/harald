@@ -7,6 +7,7 @@
   <a href="#四-agent-setup"><img alt="works with: claude code · codex · cursor" src="https://img.shields.io/badge/works%20with-claude%20code%20%C2%B7%20codex%20%C2%B7%20cursor-2b4bd8?style=flat&labelColor=2b2b2b"></a>
   <a href="#三-devices"><img alt="devices: 1 decoded" src="https://img.shields.io/badge/devices-1%20decoded-4a4640?style=flat&labelColor=2b2b2b"></a>
   <a href="https://github.com/k0nnect/harald/blob/main/LICENSE"><img alt="license: mit" src="https://img.shields.io/badge/license-mit-4a4640?style=flat&labelColor=2b2b2b"></a>
+  <a href="https://awesome.alexgaoth.com/#q=harald"><img alt="listed in: awesome-reverse-engineered" src="https://img.shields.io/badge/listed%20in-awesome--reverse--engineered-4a4640?style=flat&labelColor=2b2b2b"></a>
 </p>
 
 <p align="center">
